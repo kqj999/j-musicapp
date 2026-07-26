@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>JADE — Music Discovery</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ==========================================================================
+   JADE — design tokens
+   ========================================================================== */
+:root{
+  --bg:#070707;
+  --panel:#0E0E0E;
+  --green:#B3FF00;
+  --pink:#FF2D8B;
+  --purple:#9B7FFF;
+  --muted:#555555;
+  --text:#EDEDED;
+  --border:#232323;
+  --font-display:'Anton', sans-serif;
+  --font-mono:'JetBrains Mono', monospace;
+}
+
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--font-mono);
+  min-height:100vh;
+  overflow-x:hidden;
+  position:relative;
+}
+
+/* scanline overlay */
+body::before{
+  content:'';
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  z-index:9999;
+  background:repeating-linear-gradient(
+    to bottom,
+    rgba(255,255,255,0.02) 0px,
+    rgba(255,255,255,0.02) 1px,
+    transparent 2px,
+    transparent 4px
+  );
+  mix-blend-mode:overlay;
+}
+body::after{
+  content:'';
+  position:fixed;
+  left:0; right:0;
+  height:120px;
+  pointer-events:none;
+  z-index:9998;
+  background:linear-gradient(to bottom, transparent, rgba(179,255,0,0.035), transparent);
+  animation:scan 9s linear infinite;
+}
+@keyframes scan{
+  0%{ top:-120px; }
+  100%{ top:100vh; }
+}
+
+::selection{ background:var(--green); color:#000; }
+
+h1,h2,h3,h4{
+  font-family:var(--font-display);
+  font-weight:400;
+  letter-spacing:0.02em;
+  margin:0;
+  text-transform:uppercase;
+}
+
+button, input, textarea{
+  font-family:var(--font-mono);
+  color:inherit;
+}
+
+/* ==========================================================================
+   layout shell
+   ========================================================================== */
+#app{
+  max-width:1180px;
+  margin:0 auto;
+  padding:0 20px 80px;
+  position:relative;
+  z-index:1;
+}
+
+.hidden{ display:none !important; }
+
+/* ==========================================================================
+   PS1 panel primitive
+   ========================================================================== */
+.panel{
+  background:var(--panel);
+  border:2px solid var(--border);
+  position:relative;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.04),
+    0 0 0 1px #000;
+}
+.panel::before{
+  /* beveled corner notch, top-right */
+  content:'';
+  position:absolute;
+  top:-2px; right:-2px;
+  width:14px; height:14px;
+  background:var(--bg);
+  clip-path:polygon(100% 0, 0 0, 100% 100%);
+  border-left:2px solid var(--border);
+  border-bottom:2px solid var(--border);
+}
+
+.panel-glow{
+  border-color:var(--green);
+  box-shadow:
+    inset 0 1px 0 rgba(179,255,0,0.08),
+    0 0 12px rgba(179,255,0,0.25),
+    0 0 0 1px #000;
+}
+
+/* star accents */
+.star{
+  color:var(--green);
+  display:inline-block;
+}
+
+/* ==========================================================================
+   buttons
+   ========================================================================== */
+.btn{
+  font-family:var(--font-mono);
+  font-weight:700;
+  font-size:12px;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  background:var(--panel);
+  color:var(--text);
+  border:2px solid var(--border);
+  padding:12px 22px;
+  cursor:pointer;
+  clip-path:polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+  transition:transform 0.08s ease, box-shadow 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.btn:hover{
+  border-color:var(--green);
+  color:var(--green);
+  box-shadow:0 0 10px rgba(179,255,0,0.3);
+}
+.btn:active{ transform:scale(0.97); }
+
+.btn-primary{
+  background:var(--green);
+  color:#000;
+  border-color:var(--green);
+}
+.btn-primary:hover{
+  color:#000;
+  background:#c4ff33;
+  box-shadow:0 0 16px rgba(179,255,0,0.55);
+}
+
+.btn-pink{ border-color:var(--pink); color:var(--pink); }
+.btn-pink:hover{ color:var(--pink); box-shadow:0 0 10px rgba(255,45,139,0.35); }
+
+.btn-ghost{
+  background:transparent;
+  border-color:var(--muted);
+  color:var(--muted);
+}
+.btn-ghost:hover{ color:var(--text); border-color:var(--text); box-shadow:none; }
+
+.btn-sm{ padding:7px 14px; font-size:10px; }
+
+.btn:disabled{
+  opacity:0.35;
+  cursor:not-allowed;
+  filter:grayscale(1);
+}
+.btn:disabled:hover{
+  border-color:var(--border);
+  color:var(--text);
+  box-shadow:none;
+}
+
+/* ==========================================================================
+   inputs
+   ========================================================================== */
+.input, textarea.input{
+  background:#050505;
+  border:2px solid var(--border);
+  color:var(--text);
+  padding:11px 14px;
+  font-size:13px;
+  width:100%;
+  outline:none;
+  transition:border-color 0.15s ease;
+}
+.input:focus{ border-color:var(--green); }
+.input::placeholder{ color:var(--muted); }
+
+/* pill */
+.pill{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:8px 16px;
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  border:1.5px solid var(--border);
+  background:#0A0A0A;
+  color:var(--muted);
+  cursor:pointer;
+  clip-path:polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  transition:all 0.12s ease;
+}
+.pill:hover{ border-color:var(--green); color:var(--green); }
+.pill.active{
+  background:var(--green);
+  border-color:var(--green);
+  color:#000;
+}
+
+/* ==========================================================================
+   scanline grid backdrop accent (used behind hero/landing)
+   ========================================================================== */
+.grid-bg{
+  background-image:
+    linear-gradient(rgba(179,255,0,0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(179,255,0,0.045) 1px, transparent 1px);
+  background-size:36px 36px;
+}
+
+/* ==========================================================================
+   LANDING
+   ========================================================================== */
+#landing{
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  gap:34px;
+  padding:40px 20px;
+}
+.mascot{
+  width:150px; height:150px;
+  filter:drop-shadow(0 0 22px rgba(179,255,0,0.35));
+  animation:float 4.5s ease-in-out infinite;
+}
+@keyframes float{
+  0%,100%{ transform:translateY(0px); }
+  50%{ transform:translateY(-10px); }
+}
+.logo-title{
+  font-size:clamp(48px, 10vw, 96px);
+  color:var(--green);
+  text-shadow:0 0 24px rgba(179,255,0,0.4);
+  letter-spacing:0.03em;
+  line-height:0.9;
+}
+.logo-sub{
+  font-size:12px;
+  letter-spacing:0.35em;
+  color:var(--muted);
+  text-transform:uppercase;
+  margin-top:-8px;
+}
+.landing-actions{
+  display:flex;
+  gap:16px;
+  flex-wrap:wrap;
+  justify-content:center;
+  margin-top:12px;
+}
+.landing-actions .btn{ padding:16px 32px; font-size:13px; }
+
+/* ==========================================================================
+   PIN ENTRY
+   ========================================================================== */
+#pin-screen{
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+}
+.pin-panel{
+  padding:38px 34px;
+  width:100%;
+  max-width:340px;
+  text-align:center;
+}
+.pin-panel h2{ font-size:26px; color:var(--green); margin-bottom:4px; }
+.pin-panel p{ color:var(--muted); font-size:11px; margin:0 0 22px; letter-spacing:0.08em; }
+.pin-dots{
+  display:flex;
+  gap:12px;
+  justify-content:center;
+  margin:20px 0;
+}
+.pin-dot{
+  width:16px; height:16px;
+  border:2px solid var(--border);
+  clip-path:polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  transition:all 0.12s ease;
+}
+.pin-dot.filled{ background:var(--green); border-color:var(--green); }
+.pin-dot.error{ background:var(--pink); border-color:var(--pink); }
+.pin-keypad{
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:10px;
+  margin-top:18px;
+}
+.pin-key{
+  padding:16px 0;
+  font-size:16px;
+  font-weight:700;
+}
+.pin-error-msg{
+  color:var(--pink);
+  font-size:11px;
+  letter-spacing:0.06em;
+  height:16px;
+  margin-top:14px;
+}
+
+/* ==========================================================================
+   TOP BAR + TAB NAV
+   ========================================================================== */
+#app-shell{ padding-top:22px; }
+.topbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:10px 4px 20px;
+  border-bottom:2px solid var(--border);
+  margin-bottom:22px;
+}
+.topbar-title{
+  font-size:24px;
+  color:var(--green);
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.topbar-right{ display:flex; align-items:center; gap:10px; }
+.session-badge{
+  font-size:10px;
+  letter-spacing:0.08em;
+  color:var(--muted);
+  border:1px solid var(--border);
+  padding:6px 10px;
+  text-transform:uppercase;
+}
+.session-badge.admin{ color:var(--green); border-color:var(--green); }
+.session-badge.guest{ color:var(--pink); border-color:var(--pink); }
+
+.tabbar{
+  display:flex;
+  gap:4px;
+  margin-bottom:26px;
+  border-bottom:2px solid var(--border);
+  overflow-x:auto;
+}
+.tab-btn{
+  font-family:var(--font-mono);
+  font-weight:800;
+  font-size:12px;
+  letter-spacing:0.1em;
+  text-transform:uppercase;
+  background:transparent;
+  color:var(--muted);
+  border:none;
+  border-bottom:3px solid transparent;
+  padding:14px 20px;
+  cursor:pointer;
+  white-space:nowrap;
+  transition:color 0.15s ease, border-color 0.15s ease;
+}
+.tab-btn:hover{ color:var(--text); }
+.tab-btn.active{
+  color:var(--green);
+  border-bottom-color:var(--green);
+  text-shadow:0 0 10px rgba(179,255,0,0.4);
+}
+.tab-btn .lock-icon{ margin-left:6px; font-size:10px; }
+
+.tab-panel{ display:none; }
+.tab-panel.active{ display:block; animation:fadein 0.2s ease; }
+@keyframes fadein{ from{ opacity:0; transform:translateY(4px); } to{ opacity:1; transform:translateY(0);} }
+
+.locked-teaser{
+  padding:60px 30px;
+  text-align:center;
+}
+.locked-teaser h3{ color:var(--muted); font-size:22px; margin-bottom:10px; }
+.locked-teaser p{ color:var(--muted); font-size:12px; max-width:420px; margin:0 auto 20px; line-height:1.6; }
+
+/* ==========================================================================
+   DISCOVER TAB
+   ========================================================================== */
+.section-title{
+  font-size:13px;
+  color:var(--muted);
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  margin-bottom:12px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.pill-row{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  margin-bottom:22px;
+}
+.seed-row{
+  display:flex;
+  gap:10px;
+  margin-bottom:10px;
+  flex-wrap:wrap;
+}
+.seed-row .input{ flex:1; min-width:200px; }
+.seed-chips{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin:10px 0 20px;
+}
+.seed-chip{
+  background:#0A0A0A;
+  border:1px solid var(--pink);
+  color:var(--pink);
+  font-size:11px;
+  padding:6px 10px 6px 12px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.seed-chip button{
+  background:none; border:none; color:var(--pink); cursor:pointer; font-size:13px; padding:0;
+}
+
+.directions-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));
+  gap:18px;
+  margin-top:24px;
+}
+.direction-card{
+  padding:20px;
+  border-left-width:4px;
+}
+.direction-card.deeper{ border-left-color:var(--green); }
+.direction-card.lateral{ border-left-color:var(--pink); }
+.direction-card.wild-card{ border-left-color:var(--purple); }
+.direction-label{
+  font-family:var(--font-display);
+  font-size:18px;
+  letter-spacing:0.04em;
+  margin-bottom:8px;
+}
+.direction-card.deeper .direction-label{ color:var(--green); }
+.direction-card.lateral .direction-label{ color:var(--pink); }
+.direction-card.wild-card .direction-label{ color:var(--purple); }
+.direction-why{
+  font-size:11.5px;
+  color:#999;
+  line-height:1.6;
+  margin-bottom:16px;
+}
+.track-row{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  padding:10px 0;
+  border-top:1px solid var(--border);
+}
+.track-row:first-of-type{ border-top:none; }
+.track-info{ font-size:12px; line-height:1.5; }
+.track-title{ font-weight:700; }
+.track-meta{ color:var(--muted); font-size:10.5px; margin-top:2px; }
+.track-keybpm{ color:var(--green); font-size:10px; margin-top:2px; }
+.add-btn{
+  flex:none;
+  width:28px; height:28px;
+  background:transparent;
+  border:1.5px solid var(--border);
+  color:var(--green);
+  cursor:pointer;
+  font-size:16px;
+  line-height:1;
+  clip-path:polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+}
+.add-btn:hover{ border-color:var(--green); box-shadow:0 0 8px rgba(179,255,0,0.35); }
+.add-btn.added{ color:#000; background:var(--green); border-color:var(--green); }
+
+.saved-strip{
+  margin-top:32px;
+  padding:18px 20px;
+}
+.saved-list{ display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.saved-chip{
+  font-size:10.5px;
+  background:#0A0A0A;
+  border:1px solid var(--green);
+  color:var(--green);
+  padding:6px 10px;
+}
+
+.empty-state{
+  text-align:center;
+  padding:50px 20px;
+  color:var(--muted);
+  font-size:12px;
+}
+
+/* ==========================================================================
+   BROWSE TAB
+   ========================================================================== */
+.channel-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));
+  gap:18px;
+}
+.channel-card{ padding:18px; }
+.channel-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-bottom:14px;
+  padding-bottom:12px;
+  border-bottom:1px solid var(--border);
+}
+.channel-head h4{ font-size:16px; color:var(--text); }
+.channel-track{
+  font-size:11.5px;
+  padding:8px 0;
+  border-top:1px solid var(--border);
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  align-items:flex-start;
+}
+.channel-track:first-of-type{ border-top:none; }
+
+/* ==========================================================================
+   CRATE TAB
+   ========================================================================== */
+.crate-layout{
+  display:grid;
+  grid-template-columns:240px 1fr;
+  gap:20px;
+}
+@media (max-width:800px){
+  .crate-layout{ grid-template-columns:1fr; }
+}
+.crate-sidebar{ padding:16px; align-self:start; }
+.crate-list-item{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:10px 8px;
+  font-size:12px;
+  cursor:pointer;
+  border-left:3px solid transparent;
+}
+.crate-list-item:hover{ background:#141414; }
+.crate-list-item.active{
+  border-left-color:var(--green);
+  color:var(--green);
+  background:#141414;
+}
+.crate-main{ padding:20px; min-height:400px; }
+.crate-track-row{
+  display:grid;
+  grid-template-columns:24px 1fr auto auto;
+  align-items:center;
+  gap:12px;
+  padding:12px 0;
+  border-top:1px solid var(--border);
+}
+.crate-track-row:first-of-type{ border-top:none; }
+.drag-handle{ color:var(--muted); cursor:grab; font-size:14px; }
+.crate-track-row.dragging{ opacity:0.4; }
+.crate-notes{
+  width:100%;
+  background:#050505;
+  border:1px solid var(--border);
+  color:var(--text);
+  font-size:10.5px;
+  padding:6px 8px;
+  margin-top:6px;
+}
+
+/* ==========================================================================
+   MIXES TAB
+   ========================================================================== */
+.mix-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));
+  gap:20px;
+}
+.mix-card{ overflow:hidden; padding:0; }
+.mix-cover{
+  width:100%;
+  aspect-ratio:1/1;
+  object-fit:cover;
+  display:block;
+  border-bottom:2px solid var(--border);
+  background:#111 linear-gradient(135deg, #151515, #0a0a0a);
+}
+.mix-body{ padding:16px; }
+.mix-title{ font-size:15px; margin-bottom:4px; }
+.mix-date{ color:var(--muted); font-size:10px; margin-bottom:10px; }
+.mix-desc{ font-size:11.5px; color:#aaa; line-height:1.6; margin-bottom:14px; }
+.mix-embed{ margin:12px 0; }
+.mix-embed iframe{ width:100%; border:none; display:block; }
+
+/* ==========================================================================
+   MISC
+   ========================================================================== */
+.spinner{
+  display:inline-block;
+  width:14px; height:14px;
+  border:2px solid var(--muted);
+  border-top-color:var(--green);
+  border-radius:50%;
+  animation:spin 0.7s linear infinite;
+}
+@keyframes spin{ to{ transform:rotate(360deg); } }
+
+.toast{
+  position:fixed;
+  bottom:24px; left:50%;
+  transform:translateX(-50%);
+  background:var(--panel);
+  border:2px solid var(--green);
+  color:var(--green);
+  padding:12px 22px;
+  font-size:11px;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  z-index:10000;
+  box-shadow:0 0 20px rgba(179,255,0,0.3);
+  animation:toastin 0.2s ease;
+}
+@keyframes toastin{ from{ opacity:0; transform:translate(-50%, 10px);} to{ opacity:1; transform:translate(-50%,0);} }
+
+.icon-btn{
+  background:transparent;
+  border:1px solid var(--border);
+  color:var(--muted);
+  cursor:pointer;
+  padding:6px 9px;
+  font-size:11px;
+}
+.icon-btn:hover{ color:var(--text); border-color:var(--text); }
+
+@media (max-width:640px){
+  .topbar{ flex-direction:column; align-items:flex-start; gap:10px; }
+  .tab-btn{ padding:12px 14px; font-size:11px; }
+}
+
+/* ==========================================================================
+   GLOBAL PLAYER BAR
+   ========================================================================== */
+#player-bar{
+  position:fixed;
+  left:0; right:0; bottom:0;
+  z-index:500;
+  background:var(--panel);
+  border-top:2px solid var(--green);
+  box-shadow:0 -4px 20px rgba(0,0,0,0.6);
+  padding:12px 20px;
+  display:flex;
+  align-items:center;
+  gap:16px;
+}
+#player-bar .player-info{
+  flex:1;
+  min-width:0;
+  font-size:11.5px;
+}
+#player-bar .player-track{ font-weight:700; color:var(--green); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#player-bar .player-list{ color:var(--muted); font-size:10px; margin-top:2px; }
+#player-bar .player-controls{ display:flex; gap:8px; align-items:center; flex:none; }
+#player-bar .player-progress{
+  flex:2;
+  height:4px;
+  background:var(--border);
+  cursor:pointer;
+  position:relative;
+  min-width:80px;
+}
+#player-bar .player-progress-fill{
+  position:absolute; left:0; top:0; bottom:0;
+  background:var(--green);
+  width:0%;
+}
+body.has-player #app{ padding-bottom:100px; }
+
+/* ==========================================================================
+   MODAL
+   ========================================================================== */
+#modal-overlay{
+  position:fixed;
+  inset:0;
+  z-index:2000;
+  background:rgba(0,0,0,0.75);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+}
+.modal-panel{
+  width:100%;
+  max-width:480px;
+  max-height:90vh;
+  overflow-y:auto;
+  padding:28px 26px;
+}
+.modal-panel h3{ font-size:22px; color:var(--green); margin-bottom:18px; }
+.modal-field{ margin-bottom:16px; }
+.modal-label{
+  display:block;
+  font-size:10px;
+  letter-spacing:0.1em;
+  text-transform:uppercase;
+  color:var(--muted);
+  margin-bottom:6px;
+}
+.modal-cover-preview{
+  width:100%;
+  aspect-ratio:1/1;
+  max-width:180px;
+  object-fit:cover;
+  background:#111;
+  border:1.5px solid var(--border);
+  display:block;
+  margin-bottom:10px;
+}
+.modal-actions{
+  display:flex;
+  gap:10px;
+  justify-content:flex-end;
+  margin-top:22px;
+  padding-top:18px;
+  border-top:1px solid var(--border);
+}
+.file-drop{
+  border:1.5px dashed var(--border);
+  padding:14px;
+  text-align:center;
+  font-size:10.5px;
+  color:var(--muted);
+  cursor:pointer;
+}
+.file-drop:hover{ border-color:var(--green); color:var(--green); }
+.upload-progress{ font-size:10px; color:var(--green); margin-top:6px; }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ===================== LANDING ===================== -->
+  <section id="landing" class="grid-bg">
+    <svg class="mascot" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="100" cy="150" rx="70" ry="34" fill="#111" stroke="#333" stroke-width="2"/>
+      <path d="M55 60 L40 15 L75 45 Z" fill="#111" stroke="#333" stroke-width="2"/>
+      <path d="M145 60 L160 15 L125 45 Z" fill="#111" stroke="#333" stroke-width="2"/>
+      <circle cx="100" cy="95" r="68" fill="#0c0c0c" stroke="#3a3a3a" stroke-width="3"/>
+      <circle cx="100" cy="95" r="68" fill="none" stroke="#B3FF00" stroke-width="1" opacity="0.3"/>
+      <g>
+        <circle cx="100" cy="70" r="7" fill="#4CC3FF"/>
+        <circle cx="78" cy="80" r="7" fill="#FF2D8B"/>
+        <circle cx="122" cy="80" r="7" fill="#FFD23F"/>
+        <circle cx="70" cy="102" r="7" fill="#B3FF00"/>
+        <circle cx="130" cy="102" r="7" fill="#B3FF00"/>
+        <circle cx="88" cy="110" r="7" fill="#FF2D8B"/>
+        <circle cx="112" cy="110" r="7" fill="#FFD23F"/>
+      </g>
+      <path d="M85 128 L100 138 L115 128" fill="none" stroke="#ccc" stroke-width="2.5" stroke-linecap="round"/>
+    </svg>
+    <div>
+      <div class="logo-title">JADE</div>
+      <div class="logo-sub">underground techno · crate intelligence</div>
+    </div>
+    <div class="landing-actions">
+      <button class="btn btn-primary" id="btn-goto-mixes">✦ Mixes</button>
+      <button class="btn" id="btn-goto-pin">🔒 Enter Pin</button>
+    </div>
+  </section>
+
+  <!-- ===================== PIN SCREEN ===================== -->
+  <section id="pin-screen" class="hidden grid-bg">
+    <div class="panel panel-glow pin-panel">
+      <h2>Enter Pin</h2>
+      <p>4-digit access code</p>
+      <div class="pin-dots" id="pin-dots">
+        <div class="pin-dot"></div><div class="pin-dot"></div>
+        <div class="pin-dot"></div><div class="pin-dot"></div>
+      </div>
+      <div class="pin-error-msg" id="pin-error"></div>
+      <div class="pin-keypad" id="pin-keypad">
+        <button class="btn pin-key" data-key="1">1</button>
+        <button class="btn pin-key" data-key="2">2</button>
+        <button class="btn pin-key" data-key="3">3</button>
+        <button class="btn pin-key" data-key="4">4</button>
+        <button class="btn pin-key" data-key="5">5</button>
+        <button class="btn pin-key" data-key="6">6</button>
+        <button class="btn pin-key" data-key="7">7</button>
+        <button class="btn pin-key" data-key="8">8</button>
+        <button class="btn pin-key" data-key="9">9</button>
+        <button class="btn btn-ghost pin-key" data-key="back">⌫</button>
+        <button class="btn pin-key" data-key="0">0</button>
+        <button class="btn btn-ghost pin-key" data-key="clear">✕</button>
+      </div>
+      <div style="margin-top:20px;">
+        <button class="btn btn-ghost btn-sm" id="btn-pin-back">← back to landing</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== APP SHELL ===================== -->
+  <section id="app-shell" class="hidden">
+    <div class="topbar">
+      <div class="topbar-title"><span class="star">✦</span> JADE</div>
+      <div class="topbar-right">
+        <span class="session-badge" id="session-badge">no pin</span>
+        <button class="btn btn-ghost btn-sm" id="btn-lock">🔒 Lock</button>
+      </div>
+    </div>
+
+    <div class="tabbar">
+      <button class="tab-btn active" data-tab="discover">Discover<span class="lock-icon" id="lock-discover"></span></button>
+      <button class="tab-btn" data-tab="browse">Browse<span class="lock-icon" id="lock-browse"></span></button>
+      <button class="tab-btn" data-tab="crate">Crate</button>
+      <button class="tab-btn" data-tab="mixes">Mixes</button>
+    </div>
+
+    <!-- ---------- DISCOVER ---------- -->
+    <div class="tab-panel active" id="panel-discover"></div>
+
+    <!-- ---------- BROWSE ---------- -->
+    <div class="tab-panel" id="panel-browse"></div>
+
+    <!-- ---------- CRATE ---------- -->
+    <div class="tab-panel" id="panel-crate"></div>
+
+    <!-- ---------- MIXES ---------- -->
+    <div class="tab-panel" id="panel-mixes"></div>
+  </section>
+
+</div>
+
+<audio id="global-audio-el"></audio>
+<div id="player-bar" class="hidden"></div>
+<div id="modal-overlay" class="hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
