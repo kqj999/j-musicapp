@@ -612,10 +612,24 @@ button, input, textarea{
    ========================================================================== */
 .mix-grid{
   display:grid;
-  grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns:repeat(auto-fill, minmax(280px, 340px));
   gap:20px;
 }
-.mix-card{ overflow:hidden; padding:0; }
+.mix-card{ overflow:hidden; padding:0; position:relative; }
+.mix-card.pinned{ border-color:var(--green); box-shadow:0 0 12px rgba(179,255,0,0.2); }
+.mix-card.dragging{ opacity:0.4; }
+.mix-pinned-badge{
+  position:absolute;
+  top:8px; left:8px;
+  z-index:2;
+  background:var(--green);
+  color:#000;
+  font-size:9px;
+  font-weight:800;
+  letter-spacing:0.06em;
+  padding:4px 8px;
+  clip-path:polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+}
 .mix-cover{
   width:100%;
   aspect-ratio:1/1;

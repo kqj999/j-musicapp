@@ -3,7 +3,7 @@
    Edit WORKER_URL below once your Cloudflare Worker is deployed.
    ============================================================================ */
 
-const WORKER_URL = "https://jade-music-proxy.kqj.workers.dev";
+const WORKER_URL = "https://jade-music-proxy.YOUR-SUBDOMAIN.workers.dev";
 
 const VIBE_PILLS = ["Sandy Techno", "RDH", "Goth Girl Techno", "Gothy Meowwave", "Hot Girl Techno", "House Cat"];
 const BROWSE_CHANNELS = ["Sandy Techno", "RDH Techno", "Hot Girl Techno", "Goth Girl Techno", "Cool Remixes", "House Cat"];
@@ -965,6 +965,8 @@ function embedFor(url) {
   return `<a href="${url}" target="_blank" rel="noopener" class="btn btn-sm">Listen ↗</a>`;
 }
 
+const MAX_PINNED_MIXES = 3;
+
 function renderMixes() {
   const isAdmin = state.authLevel === "admin";
   const mixes = state.mixes.list;
@@ -981,14 +983,16 @@ function renderMixes() {
     grid.innerHTML = mixes
       .map(
         (m, i) => `
-      <div class="panel mix-card">
+      <div class="panel mix-card ${m.pinned ? "pinned" : ""}" draggable="${isAdmin}" data-i="${i}">
+        ${m.pinned ? '<div class="mix-pinned-badge">★ PINNED</div>' : ""}
         ${m.cover ? `<img class="mix-cover" src="${escapeAttr(m.cover)}" alt="${escapeAttr(m.title)}" />` : `<div class="mix-cover"></div>`}
         <div class="mix-body">
           <div class="mix-title">${escapeHtml(m.title || "Untitled Mix")}</div>
           <div class="mix-date">${escapeHtml(m.date || "")}</div>
           <div class="mix-desc">${escapeHtml(m.description || "")}</div>
           <div class="mix-embed">${embedFor(m.link)}</div>
-          ${isAdmin ? `<div style="display:flex; gap:8px; margin-top:10px;">
+          ${isAdmin ? `<div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+            <button class="icon-btn" data-pin="${i}">${m.pinned ? "★ unpin" : "☆ pin"}</button>
             <button class="icon-btn" data-edit="${i}">edit</button>
             <button class="icon-btn" data-delete="${i}">delete</button>
           </div>` : ""}
@@ -1002,7 +1006,50 @@ function renderMixes() {
     document.getElementById("btn-add-mix").onclick = () => openMixEditor(null);
     grid.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openMixEditor(+b.dataset.edit)));
     grid.querySelectorAll("[data-delete]").forEach((b) => (b.onclick = () => deleteMix(+b.dataset.delete)));
+    grid.querySelectorAll("[data-pin]").forEach((b) => (b.onclick = () => toggleMixPin(+b.dataset.pin)));
+    setupMixDragReorder(grid);
   }
+}
+
+function toggleMixPin(index) {
+  const mix = state.mixes.list[index];
+  if (!mix) return;
+
+  if (!mix.pinned) {
+    const pinnedCount = state.mixes.list.filter((m) => m.pinned).length;
+    if (pinnedCount >= MAX_PINNED_MIXES) {
+      toast(`You can only pin up to ${MAX_PINNED_MIXES} mixes — unpin one first`);
+      return;
+    }
+  }
+
+  mix.pinned = !mix.pinned;
+
+  // Keep pinned mixes grouped at the front, preserving relative order within each group.
+  const pinned = state.mixes.list.filter((m) => m.pinned);
+  const unpinned = state.mixes.list.filter((m) => !m.pinned);
+  state.mixes.list = [...pinned, ...unpinned];
+
+  persistMixes();
+}
+
+function setupMixDragReorder(container) {
+  let dragIndex = null;
+  container.querySelectorAll(".mix-card").forEach((card) => {
+    card.addEventListener("dragstart", () => {
+      dragIndex = +card.dataset.i;
+      card.classList.add("dragging");
+    });
+    card.addEventListener("dragend", () => card.classList.remove("dragging"));
+    card.addEventListener("dragover", (e) => e.preventDefault());
+    card.addEventListener("drop", () => {
+      const dropIndex = +card.dataset.i;
+      if (dragIndex === null || dragIndex === dropIndex) return;
+      const [moved] = state.mixes.list.splice(dragIndex, 1);
+      state.mixes.list.splice(dropIndex, 0, moved);
+      persistMixes();
+    });
+  });
 }
 
 function openMixEditor(index) {
@@ -1082,6 +1129,7 @@ function openMixEditor(index) {
         date: document.getElementById("mix-date").value.trim(),
         link: document.getElementById("mix-link").value.trim(),
         cover: draft.cover || "",
+        pinned: existing.pinned || false,
       };
       if (index !== null) {
         state.mixes.list[index] = mix;
