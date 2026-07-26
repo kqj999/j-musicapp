@@ -3,7 +3,7 @@
    Edit WORKER_URL below once your Cloudflare Worker is deployed.
    ============================================================================ */
 
-const WORKER_URL = "https://jade-music-proxy.YOUR-SUBDOMAIN.workers.dev";
+const WORKER_URL = "https://jade-music-proxy.kqj.workers.dev";
 
 const VIBE_PILLS = ["Sandy Techno", "RDH", "Goth Girl Techno", "Gothy Meowwave", "Hot Girl Techno", "House Cat"];
 const BROWSE_CHANNELS = ["Sandy Techno", "RDH Techno", "Hot Girl Techno", "Goth Girl Techno", "Cool Remixes", "House Cat"];
