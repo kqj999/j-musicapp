@@ -953,14 +953,14 @@ function embedFor(url) {
   if (!url) return "";
   if (url.includes("mixcloud.com")) {
     const feed = encodeURIComponent(new URL(url).pathname);
-    return `<iframe height="120" src="https://www.mixcloud.com/widget/iframe/?hide_cover=1&feed=${feed}" allow="autoplay"></iframe>`;
+    return `<iframe height="400" src="https://www.mixcloud.com/widget/iframe/?hide_cover=0&feed=${feed}" allow="autoplay"></iframe>`;
   }
   if (url.includes("soundcloud.com")) {
-    return `<iframe height="120" src="https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&color=%23b3ff00&auto_play=false"></iframe>`;
+    return `<iframe height="300" src="https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&color=%23b3ff00&auto_play=false&visual=true&show_artwork=true"></iframe>`;
   }
   if (url.includes("spotify.com")) {
     const embedUrl = url.replace("open.spotify.com/", "open.spotify.com/embed/");
-    return `<iframe height="152" src="${embedUrl}" allow="encrypted-media"></iframe>`;
+    return `<iframe height="352" src="${embedUrl}" allow="encrypted-media"></iframe>`;
   }
   return `<a href="${url}" target="_blank" rel="noopener" class="btn btn-sm">Listen ↗</a>`;
 }
@@ -984,12 +984,11 @@ function renderMixes() {
       .map(
         (m, i) => `
       <div class="panel mix-card ${m.pinned ? "pinned" : ""}" draggable="${isAdmin}" data-i="${i}">
-        ${m.pinned ? '<div class="mix-pinned-badge">★ PINNED</div>' : ""}
         <div class="mix-body">
-          <div class="mix-title">${escapeHtml(m.title || "Untitled Mix")}</div>
+          <div class="mix-title">${m.pinned ? '<span class="mix-pin-star">★</span> ' : ""}${escapeHtml(m.title || "Untitled Mix")}</div>
           <div class="mix-date">${escapeHtml(m.date || "")}</div>
-          <div class="mix-desc">${escapeHtml(m.description || "")}</div>
           <div class="mix-embed">${embedFor(m.link)}</div>
+          <div class="mix-desc">${escapeHtml(m.description || "")}</div>
           ${isAdmin ? `<div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
             <button class="icon-btn" data-pin="${i}">${m.pinned ? "★ unpin" : "☆ pin"}</button>
             <button class="icon-btn" data-edit="${i}">edit</button>
