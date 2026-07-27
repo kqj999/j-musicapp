@@ -123,22 +123,23 @@ document.getElementById("pin-keypad").addEventListener("click", (e) => {
   }
 });
 
+// Tiers: 'admin' (full access), 'view' (sees Discover/Browse UI as a preview,
+// but can't actually run searches — no credits spent), 'guest' (Discover/Browse
+// stay behind a locked teaser), 'none'.
+function discoverBrowseVisible() {
+  return state.authLevel === "admin" || state.authLevel === "view";
+}
+function canRunDiscoverBrowse() {
+  return state.authLevel === "admin";
+}
+
 async function submitPin(pin) {
-  // We don't have a dedicated /auth endpoint — verify by pinging /crate (admin)
-  // and falling back to /public-crate (guest). Any 401 on both means invalid.
   try {
     state.pin = pin;
-    const adminRes = await fetch(WORKER_URL + "/crate", { headers: { "X-Pin": pin } });
-    if (adminRes.ok) {
-      state.authLevel = "admin";
-    } else {
-      const guestRes = await fetch(WORKER_URL + "/public-crate", { headers: { "X-Pin": pin } });
-      if (guestRes.ok) {
-        state.authLevel = "guest";
-      } else {
-        throw new Error("invalid");
-      }
-    }
+    const res = await fetch(WORKER_URL + "/auth", { headers: { "X-Pin": pin } });
+    const data = await res.json().catch(() => ({}));
+    if (!data.level || data.level === "none") throw new Error("invalid");
+    state.authLevel = data.level;
 
     sessionStorage.setItem("jade_pin", pin);
     sessionStorage.setItem("jade_auth_level", state.authLevel);
@@ -169,14 +170,16 @@ document.getElementById("btn-lock").onclick = () => {
   landing.classList.remove("hidden");
 };
 
+const SESSION_BADGE_LABELS = { admin: "admin", view: "view", guest: "guest" };
+
 function renderSessionBadge() {
   const el = document.getElementById("session-badge");
-  el.textContent = state.authLevel === "admin" ? "admin" : state.authLevel === "guest" ? "guest" : "no pin";
-  el.className = "session-badge " + (state.authLevel === "admin" ? "admin" : state.authLevel === "guest" ? "guest" : "");
+  el.textContent = SESSION_BADGE_LABELS[state.authLevel] || "no pin";
+  el.className = "session-badge " + (SESSION_BADGE_LABELS[state.authLevel] ? state.authLevel : "");
 }
 
 function renderTabLocks() {
-  const locked = state.authLevel !== "admin";
+  const locked = !discoverBrowseVisible();
   document.getElementById("lock-discover").textContent = locked ? "🔒" : "";
   document.getElementById("lock-browse").textContent = locked ? "🔒" : "";
 }
@@ -210,7 +213,7 @@ function setActiveTab(tab) {
 function loadInitialData() {
   if (state.authLevel === "admin") {
     loadCrate();
-  } else if (state.authLevel === "guest") {
+  } else if (state.authLevel === "guest" || state.authLevel === "view") {
     loadPublicCrate();
   }
   loadMixes();
@@ -356,11 +359,11 @@ function closeModal() {
 const panelDiscover = document.getElementById("panel-discover");
 
 function renderDiscover() {
-  if (state.authLevel !== "admin") {
+  if (!discoverBrowseVisible()) {
     panelDiscover.innerHTML = `
       <div class="panel locked-teaser">
         <h3>🔒 Discover</h3>
-        <p>Discover generates three fresh directions — Deeper, Lateral, Wild Card — from any seed track, artist, or vibe, tuned to Jade's exact taste and library. Admin access only.</p>
+        <p>Discover generates three fresh directions — Deeper, Lateral, Wild Card — from any seed track, artist, or vibe, tuned to Jade's exact taste and library.</p>
         <button class="btn" id="teaser-pin-discover">Enter Pin</button>
       </div>`;
     document.getElementById("teaser-pin-discover").onclick = () => {
@@ -378,12 +381,12 @@ function renderDiscover() {
 
     <div class="section-title"><span class="star">✦</span> Seeds <span style="color:var(--muted); font-weight:400; text-transform:none;">(up to 3 — artist, track, or vibe)</span></div>
     <div class="seed-row">
-      <input class="input" id="seed-input" placeholder="e.g. Mython, Bespoke, dusty hypnotic groove..." />
-      <button class="btn" id="btn-add-seed">Add</button>
+      <input class="input" id="seed-input" placeholder="e.g. Mython, Bespoke, dusty hypnotic groove..." ${canRunDiscoverBrowse() ? "" : "disabled"} />
+      <button class="btn" id="btn-add-seed" ${canRunDiscoverBrowse() ? "" : "disabled"}>Add</button>
     </div>
     <div class="seed-chips" id="seed-chips"></div>
 
-    <button class="btn btn-primary" id="btn-search" ${d.loading ? "disabled" : ""}>
+    <button class="btn btn-primary" id="btn-search" ${d.loading || !canRunDiscoverBrowse() ? "disabled" : ""}>
       ${d.loading ? '<span class="spinner"></span> Searching...' : "🔍 Search"}
     </button>
 
@@ -406,7 +409,7 @@ function renderDiscover() {
 function renderVibePills() {
   const el = document.getElementById("vibe-pills");
   el.innerHTML = VIBE_PILLS.map(
-    (v) => `<button class="pill ${state.discover.activeVibe === v ? "active" : ""}" data-vibe="${v}">${v}</button>`
+    (v) => `<button class="pill ${state.discover.activeVibe === v ? "active" : ""}" data-vibe="${v}" ${canRunDiscoverBrowse() ? "" : "disabled"}>${v}</button>`
   ).join("");
   el.querySelectorAll(".pill").forEach((p) => {
     p.onclick = () => {
@@ -443,6 +446,10 @@ function renderSeedChips() {
 }
 
 async function runDiscoverSearch() {
+  if (!canRunDiscoverBrowse()) {
+    toast("Search is admin-only — you're viewing a preview");
+    return;
+  }
   if (state.discover.seeds.length === 0 && !state.discover.activeVibe) {
     toast("Add a seed or pick a vibe first");
     return;
@@ -465,6 +472,10 @@ async function runDiscoverSearch() {
 }
 
 async function refineFromSaved() {
+  if (!canRunDiscoverBrowse()) {
+    toast("Search is admin-only — you're viewing a preview");
+    return;
+  }
   if (state.discover.savedTracks.length === 0) return;
   state.discover.loading = true;
   renderDiscover();
@@ -573,11 +584,11 @@ function renderSavedStrip() {
 const panelBrowse = document.getElementById("panel-browse");
 
 function renderBrowse() {
-  if (state.authLevel !== "admin") {
+  if (!discoverBrowseVisible()) {
     panelBrowse.innerHTML = `
       <div class="panel locked-teaser">
         <h3>🔒 Browse</h3>
-        <p>Six curated genre channels — Sandy Techno, RDH, Hot Girl Techno, Goth Girl Techno, Cool Remixes, House Cat — refreshed on demand. Admin access only.</p>
+        <p>Six curated genre channels — Sandy Techno, RDH, Hot Girl Techno, Goth Girl Techno, Cool Remixes, House Cat — refreshed on demand.</p>
         <button class="btn" id="teaser-pin-browse">Enter Pin</button>
       </div>`;
     document.getElementById("teaser-pin-browse").onclick = () => {
@@ -592,7 +603,7 @@ function renderBrowse() {
       <div class="panel channel-card" id="channel-${slug(ch)}">
         <div class="channel-head">
           <h4>${escapeHtml(ch)}</h4>
-          <button class="icon-btn" data-channel="${ch}">↻ refresh</button>
+          <button class="icon-btn" data-channel="${ch}" ${canRunDiscoverBrowse() ? "" : "disabled"}>↻ refresh</button>
         </div>
         <div class="channel-body">
           <div class="empty-state">Tap refresh to generate suggestions</div>
@@ -611,6 +622,10 @@ function slug(s) {
 }
 
 async function loadBrowseChannel(channel) {
+  if (!canRunDiscoverBrowse()) {
+    toast("Refresh is admin-only — you're viewing a preview");
+    return;
+  }
   const container = document.querySelector(`#channel-${slug(channel)} .channel-body`);
   container.innerHTML = `<div class="empty-state"><span class="spinner"></span> Loading...</div>`;
   try {
