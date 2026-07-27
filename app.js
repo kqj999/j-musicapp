@@ -391,13 +391,13 @@ function renderDiscover() {
     </button>
 
     <div id="directions-container"></div>
-    <div id="saved-container"></div>
+    <div id="saved-container-discover"></div>
   `;
 
   renderVibePills();
   renderSeedChips();
   renderDirections();
-  renderSavedStrip();
+  renderSavedStrip("saved-container-discover");
 
   document.getElementById("btn-add-seed").onclick = addSeedFromInput;
   document.getElementById("seed-input").addEventListener("keydown", (e) => {
@@ -551,12 +551,13 @@ function renderDirections() {
 
 function addToSavedList(track) {
   state.discover.savedTracks.push(track);
-  renderSavedStrip();
+  renderSavedStrip("saved-container-discover");
+  renderSavedStrip("saved-container-browse");
   toast(`Saved ${track.artist}${track.track ? " — " + track.track : ""}`);
 }
 
-function renderSavedStrip() {
-  const el = document.getElementById("saved-container");
+function renderSavedStrip(containerId) {
+  const el = document.getElementById(containerId);
   if (!el) return;
   const saved = state.discover.savedTracks;
   if (saved.length === 0) {
@@ -570,12 +571,12 @@ function renderSavedStrip() {
         ${saved.map((t) => `<div class="saved-chip">${escapeHtml(t.artist)}${t.track ? " — " + escapeHtml(t.track) : ""}</div>`).join("")}
       </div>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <button class="btn btn-pink btn-sm" id="btn-refine">↻ Refine from this list</button>
-        <button class="btn btn-primary btn-sm" id="btn-save-crate">Save all to Crate</button>
+        <button class="btn btn-pink btn-sm" data-action="refine">↻ Refine from this list</button>
+        <button class="btn btn-primary btn-sm" data-action="save-crate">Save all to Crate</button>
       </div>
     </div>`;
-  document.getElementById("btn-refine").onclick = refineFromSaved;
-  document.getElementById("btn-save-crate").onclick = () => saveTracksToCrate(state.discover.savedTracks);
+  el.querySelector('[data-action="refine"]').onclick = refineFromSaved;
+  el.querySelector('[data-action="save-crate"]').onclick = () => saveTracksToCrate(state.discover.savedTracks);
 }
 
 // ============================================================================
@@ -610,7 +611,10 @@ function renderBrowse() {
         </div>
       </div>
     `).join("")}
-  </div>`;
+  </div>
+  <div id="saved-container-browse"></div>`;
+
+  renderSavedStrip("saved-container-browse");
 
   panelBrowse.querySelectorAll(".icon-btn").forEach((btn) => {
     btn.onclick = () => loadBrowseChannel(btn.dataset.channel);
