@@ -985,7 +985,6 @@ function renderMixes() {
         (m, i) => `
       <div class="panel mix-card ${m.pinned ? "pinned" : ""}" draggable="${isAdmin}" data-i="${i}">
         ${m.pinned ? '<div class="mix-pinned-badge">★ PINNED</div>' : ""}
-        ${m.cover ? `<img class="mix-cover" src="${escapeAttr(m.cover)}" alt="${escapeAttr(m.title)}" />` : `<div class="mix-cover"></div>`}
         <div class="mix-body">
           <div class="mix-title">${escapeHtml(m.title || "Untitled Mix")}</div>
           <div class="mix-date">${escapeHtml(m.date || "")}</div>
@@ -1053,40 +1052,29 @@ function setupMixDragReorder(container) {
 }
 
 function openMixEditor(index) {
-  const existing = index !== null ? { ...state.mixes.list[index] } : { title: "", description: "", date: "", link: "", cover: "" };
-  const draft = { ...existing }; // local working copy, only committed on Save
+  const existing = index !== null ? { ...state.mixes.list[index] } : { title: "", description: "", date: "", link: "" };
 
   const html = `
     <h3>${index !== null ? "Edit Mix" : "Add Mix"}</h3>
 
     <div class="modal-field">
-      <label class="modal-label">Cover art</label>
-      <img class="modal-cover-preview" id="mix-cover-preview" src="${escapeAttr(draft.cover || "")}" style="${draft.cover ? "" : "display:none;"}" />
-      <label class="file-drop" id="mix-cover-drop">
-        📷 tap to choose an image (jpg / png / webp)
-        <input type="file" id="mix-cover-input" accept="image/jpeg,image/png,image/webp,image/gif" style="display:none;" />
-      </label>
-      <div class="upload-progress" id="mix-cover-status"></div>
-    </div>
-
-    <div class="modal-field">
       <label class="modal-label">Title</label>
-      <input class="input" id="mix-title" value="${escapeAttr(draft.title)}" placeholder="Desert Dust · Spring 2025" />
+      <input class="input" id="mix-title" value="${escapeAttr(existing.title)}" placeholder="Desert Dust · Spring 2025" />
     </div>
 
     <div class="modal-field">
       <label class="modal-label">Description / vibe notes</label>
-      <textarea class="input" id="mix-description" rows="3" placeholder="What this mix sounds like...">${escapeHtml(draft.description)}</textarea>
+      <textarea class="input" id="mix-description" rows="3" placeholder="What this mix sounds like...">${escapeHtml(existing.description)}</textarea>
     </div>
 
     <div class="modal-field">
       <label class="modal-label">Date</label>
-      <input class="input" id="mix-date" value="${escapeAttr(draft.date)}" placeholder="Spring 2025" />
+      <input class="input" id="mix-date" value="${escapeAttr(existing.date)}" placeholder="Spring 2025" />
     </div>
 
     <div class="modal-field">
       <label class="modal-label">Link (Mixcloud / SoundCloud / Spotify URL)</label>
-      <input class="input" id="mix-link" value="${escapeAttr(draft.link)}" placeholder="https://..." />
+      <input class="input" id="mix-link" value="${escapeAttr(existing.link)}" placeholder="https://..." />
     </div>
 
     <div class="modal-actions">
@@ -1098,37 +1086,12 @@ function openMixEditor(index) {
   openModal(html, () => {
     document.getElementById("mix-cancel").onclick = closeModal;
 
-    document.getElementById("mix-cover-drop").onclick = (e) => {
-      // clicking the label already opens the file input via <label>/<input> association,
-      // this handler exists only to stop the click from bubbling to modalOverlay's close-on-backdrop-click
-      e.stopPropagation();
-    };
-
-    document.getElementById("mix-cover-input").onchange = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const statusEl = document.getElementById("mix-cover-status");
-      statusEl.textContent = "uploading...";
-      try {
-        const url = await uploadMedia(file, "cover");
-        draft.cover = url;
-        const preview = document.getElementById("mix-cover-preview");
-        preview.src = url;
-        preview.style.display = "block";
-        statusEl.textContent = "uploaded ✓";
-      } catch (err) {
-        statusEl.textContent = "";
-        toast("Cover upload failed: " + err.message);
-      }
-    };
-
     document.getElementById("mix-save").onclick = () => {
       const mix = {
         title: document.getElementById("mix-title").value.trim() || "Untitled Mix",
         description: document.getElementById("mix-description").value.trim(),
         date: document.getElementById("mix-date").value.trim(),
         link: document.getElementById("mix-link").value.trim(),
-        cover: draft.cover || "",
         pinned: existing.pinned || false,
       };
       if (index !== null) {
