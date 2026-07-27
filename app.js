@@ -949,84 +949,139 @@ async function loadMixes() {
   }
 }
 
-function embedFor(url) {
+function youtubeEmbedUrl(url) {
+  // Handles youtu.be/ID, youtube.com/watch?v=ID, youtube.com/embed/ID, youtube.com/live/ID
+  const patterns = [
+    /youtu\.be\/([a-zA-Z0-9_-]{6,})/,
+    /youtube\.com\/watch\?v=([a-zA-Z0-9_-]{6,})/,
+    /youtube\.com\/embed\/([a-zA-Z0-9_-]{6,})/,
+    /youtube\.com\/live\/([a-zA-Z0-9_-]{6,})/,
+  ];
+  for (const re of patterns) {
+    const match = url.match(re);
+    if (match) return `https://www.youtube.com/embed/${match[1]}`;
+  }
+  return null;
+}
+
+function embedFor(url, type) {
   if (!url) return "";
+
+  if (type === "video") {
+    const ytUrl = youtubeEmbedUrl(url);
+    if (ytUrl) {
+      return `<div class="mix-embed-frame video-frame"><iframe src="${ytUrl}" allow="autoplay; encrypted-media" allowfullscreen></iframe></div>`;
+    }
+    if (url.includes("mixcloud.com")) {
+      const feed = encodeURIComponent(new URL(url).pathname);
+      return `<div class="mix-embed-frame"><iframe height="400" src="https://www.mixcloud.com/widget/iframe/?hide_cover=0&feed=${feed}" allow="autoplay"></iframe></div>`;
+    }
+    return `<a href="${url}" target="_blank" rel="noopener" class="btn btn-sm">Watch ↗</a>`;
+  }
+
+  // Audio — classic horizontal SoundCloud/Mixcloud bar player
+  if (url.includes("soundcloud.com")) {
+    return `<div class="mix-embed-frame"><iframe height="166" src="https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&color=%23b3ff00&auto_play=false&show_artwork=true&show_user=true"></iframe></div>`;
+  }
   if (url.includes("mixcloud.com")) {
     const feed = encodeURIComponent(new URL(url).pathname);
-    return `<iframe height="400" src="https://www.mixcloud.com/widget/iframe/?hide_cover=0&feed=${feed}" allow="autoplay"></iframe>`;
-  }
-  if (url.includes("soundcloud.com")) {
-    return `<iframe height="300" src="https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&color=%23b3ff00&auto_play=false&visual=true&show_artwork=true"></iframe>`;
+    return `<div class="mix-embed-frame"><iframe height="120" src="https://www.mixcloud.com/widget/iframe/?hide_cover=1&feed=${feed}" allow="autoplay"></iframe></div>`;
   }
   if (url.includes("spotify.com")) {
     const embedUrl = url.replace("open.spotify.com/", "open.spotify.com/embed/");
-    return `<iframe height="352" src="${embedUrl}" allow="encrypted-media"></iframe>`;
+    return `<div class="mix-embed-frame"><iframe height="152" src="${embedUrl}" allow="encrypted-media"></iframe></div>`;
   }
   return `<a href="${url}" target="_blank" rel="noopener" class="btn btn-sm">Listen ↗</a>`;
 }
 
-const MAX_PINNED_MIXES = 3;
+const MAX_PINNED_PER_SECTION = 3;
 
 function renderMixes() {
   const isAdmin = state.authLevel === "admin";
   const mixes = state.mixes.list;
 
   panelMixes.innerHTML = `
-    ${isAdmin ? '<button class="btn btn-primary btn-sm" id="btn-add-mix" style="margin-bottom:20px;">+ Add Mix</button>' : ""}
-    <div class="mix-grid" id="mix-grid"></div>
+    ${isAdmin ? '<button class="btn btn-primary btn-sm" id="btn-add-mix" style="margin-bottom:24px;">+ Add Mix</button>' : ""}
+    ${mixes.length === 0 ? '<div class="empty-state">No mixes uploaded yet.</div>' : `
+      <div class="mix-section">
+        <div class="section-title">🎧 Audio</div>
+        <div class="mix-grid" id="mix-grid-audio"></div>
+      </div>
+      <div class="mix-section">
+        <div class="section-title">🎥 Video</div>
+        <div class="mix-grid" id="mix-grid-video"></div>
+      </div>
+    `}
   `;
 
-  const grid = document.getElementById("mix-grid");
-  if (mixes.length === 0) {
-    grid.innerHTML = `<div class="empty-state">No mixes uploaded yet.</div>`;
-  } else {
-    grid.innerHTML = mixes
-      .map(
-        (m, i) => `
-      <div class="panel mix-card ${m.pinned ? "pinned" : ""}" draggable="${isAdmin}" data-i="${i}">
-        <div class="mix-body">
-          <div class="mix-title">${m.pinned ? '<span class="mix-pin-star">★</span> ' : ""}${escapeHtml(m.title || "Untitled Mix")}</div>
-          <div class="mix-date">${escapeHtml(m.date || "")}</div>
-          <div class="mix-embed">${embedFor(m.link)}</div>
-          <div class="mix-desc">${escapeHtml(m.description || "")}</div>
-          ${isAdmin ? `<div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
-            <button class="icon-btn" data-pin="${i}">${m.pinned ? "★ unpin" : "☆ pin"}</button>
-            <button class="icon-btn" data-edit="${i}">edit</button>
-            <button class="icon-btn" data-delete="${i}">delete</button>
-          </div>` : ""}
-        </div>
-      </div>`
-      )
-      .join("");
-  }
+  if (mixes.length === 0) return;
+
+  renderMixSection("audio", document.getElementById("mix-grid-audio"), isAdmin);
+  renderMixSection("video", document.getElementById("mix-grid-video"), isAdmin);
 
   if (isAdmin) {
     document.getElementById("btn-add-mix").onclick = () => openMixEditor(null);
+  }
+}
+
+function mixCardHtml(m, i, isAdmin) {
+  return `
+    <div class="panel mix-card ${m.pinned ? "pinned" : ""}" draggable="${isAdmin}" data-i="${i}">
+      <div class="mix-body">
+        <div class="mix-title">${m.pinned ? '<span class="mix-pin-star">★</span> ' : ""}${escapeHtml(m.title || "Untitled Mix")}</div>
+        <div class="mix-date">${escapeHtml(m.date || "")}</div>
+        <div class="mix-embed">${embedFor(m.link, m.type)}</div>
+        <div class="mix-desc">${escapeHtml(m.description || "")}</div>
+        ${isAdmin ? `<div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+          <button class="icon-btn" data-pin="${i}">${m.pinned ? "★ unpin" : "☆ pin"}</button>
+          <button class="icon-btn" data-edit="${i}">edit</button>
+          <button class="icon-btn" data-delete="${i}">delete</button>
+        </div>` : ""}
+      </div>
+    </div>`;
+}
+
+function renderMixSection(type, grid, isAdmin) {
+  if (!grid) return;
+  const entries = state.mixes.list
+    .map((m, i) => ({ m, i }))
+    .filter(({ m }) => (m.type || "audio") === type);
+
+  if (entries.length === 0) {
+    grid.innerHTML = `<div class="empty-state">No ${type} mixes yet.</div>`;
+    return;
+  }
+
+  grid.innerHTML = entries.map(({ m, i }) => mixCardHtml(m, i, isAdmin)).join("");
+
+  if (isAdmin) {
     grid.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openMixEditor(+b.dataset.edit)));
     grid.querySelectorAll("[data-delete]").forEach((b) => (b.onclick = () => deleteMix(+b.dataset.delete)));
-    grid.querySelectorAll("[data-pin]").forEach((b) => (b.onclick = () => toggleMixPin(+b.dataset.pin)));
+    grid.querySelectorAll("[data-pin]").forEach((b) => (b.onclick = () => toggleMixPin(+b.dataset.pin, type)));
     setupMixDragReorder(grid);
   }
 }
 
-function toggleMixPin(index) {
+function toggleMixPin(index, type) {
   const mix = state.mixes.list[index];
   if (!mix) return;
 
   if (!mix.pinned) {
-    const pinnedCount = state.mixes.list.filter((m) => m.pinned).length;
-    if (pinnedCount >= MAX_PINNED_MIXES) {
-      toast(`You can only pin up to ${MAX_PINNED_MIXES} mixes — unpin one first`);
+    const pinnedCount = state.mixes.list.filter((m) => m.pinned && (m.type || "audio") === type).length;
+    if (pinnedCount >= MAX_PINNED_PER_SECTION) {
+      toast(`You can only pin up to ${MAX_PINNED_PER_SECTION} ${type} mixes — unpin one first`);
       return;
     }
   }
 
   mix.pinned = !mix.pinned;
 
-  // Keep pinned mixes grouped at the front, preserving relative order within each group.
-  const pinned = state.mixes.list.filter((m) => m.pinned);
-  const unpinned = state.mixes.list.filter((m) => !m.pinned);
-  state.mixes.list = [...pinned, ...unpinned];
+  // Keep pinned mixes grouped at the front within their own type, preserving relative order.
+  const sameType = state.mixes.list.filter((m) => (m.type || "audio") === type);
+  const otherType = state.mixes.list.filter((m) => (m.type || "audio") !== type);
+  const pinned = sameType.filter((m) => m.pinned);
+  const unpinned = sameType.filter((m) => !m.pinned);
+  state.mixes.list = [...otherType, ...pinned, ...unpinned];
 
   persistMixes();
 }
@@ -1051,10 +1106,19 @@ function setupMixDragReorder(container) {
 }
 
 function openMixEditor(index) {
-  const existing = index !== null ? { ...state.mixes.list[index] } : { title: "", description: "", date: "", link: "" };
+  const existing = index !== null ? { ...state.mixes.list[index] } : { title: "", description: "", date: "", link: "", type: "audio" };
+  let selectedType = existing.type || "audio";
 
   const html = `
     <h3>${index !== null ? "Edit Mix" : "Add Mix"}</h3>
+
+    <div class="modal-field">
+      <label class="modal-label">Type</label>
+      <div class="pill-row" id="mix-type-pills" style="margin-bottom:0;">
+        <button type="button" class="pill ${selectedType === "audio" ? "active" : ""}" data-type="audio">🎧 Audio</button>
+        <button type="button" class="pill ${selectedType === "video" ? "active" : ""}" data-type="video">🎥 Video</button>
+      </div>
+    </div>
 
     <div class="modal-field">
       <label class="modal-label">Title</label>
@@ -1072,7 +1136,7 @@ function openMixEditor(index) {
     </div>
 
     <div class="modal-field">
-      <label class="modal-label">Link (Mixcloud / SoundCloud / Spotify URL)</label>
+      <label class="modal-label">Link (SoundCloud / Mixcloud / Spotify / YouTube URL)</label>
       <input class="input" id="mix-link" value="${escapeAttr(existing.link)}" placeholder="https://..." />
     </div>
 
@@ -1085,12 +1149,20 @@ function openMixEditor(index) {
   openModal(html, () => {
     document.getElementById("mix-cancel").onclick = closeModal;
 
+    document.getElementById("mix-type-pills").querySelectorAll(".pill").forEach((p) => {
+      p.onclick = () => {
+        selectedType = p.dataset.type;
+        document.getElementById("mix-type-pills").querySelectorAll(".pill").forEach((pp) => pp.classList.toggle("active", pp.dataset.type === selectedType));
+      };
+    });
+
     document.getElementById("mix-save").onclick = () => {
       const mix = {
         title: document.getElementById("mix-title").value.trim() || "Untitled Mix",
         description: document.getElementById("mix-description").value.trim(),
         date: document.getElementById("mix-date").value.trim(),
         link: document.getElementById("mix-link").value.trim(),
+        type: selectedType,
         pinned: existing.pinned || false,
       };
       if (index !== null) {

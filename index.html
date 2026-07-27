@@ -610,6 +610,8 @@ button, input, textarea{
 /* ==========================================================================
    MIXES TAB
    ========================================================================== */
+.mix-section{ margin-bottom:36px; }
+.mix-section:last-child{ margin-bottom:0; }
 .mix-grid{
   display:grid;
   grid-template-columns:repeat(auto-fill, minmax(340px, 480px));
@@ -627,7 +629,14 @@ button, input, textarea{
 .mix-title{ font-size:20px; margin-bottom:6px; line-height:1.25; }
 .mix-date{ color:var(--muted); font-size:10px; margin-bottom:14px; }
 .mix-embed{ margin:0 0 14px; }
+.mix-embed-frame{
+  border-radius:6px;
+  overflow:hidden;
+  border:1px solid var(--border);
+}
 .mix-embed iframe{ width:100%; border:none; display:block; }
+.mix-embed-frame.video-frame{ position:relative; width:100%; aspect-ratio:16/9; }
+.mix-embed-frame.video-frame iframe{ position:absolute; inset:0; width:100%; height:100%; }
 .mix-desc{ font-size:11.5px; color:#aaa; line-height:1.6; }
 
 /* ==========================================================================
