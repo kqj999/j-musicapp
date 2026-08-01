@@ -1518,7 +1518,55 @@ function renderAdmin() {
             <div class="track-title">${escapeHtml(u.name)} <span style="color:var(--muted);">(${escapeHtml(u.username)})</span></div>
             <div class="track-meta">${escapeHtml(u.tier)}${u.pinIsTemp ? " · temp PIN not yet set" : ""}</div>
           </div>
+          <div style="display:flex; gap:8px;">
+            <button class="icon-btn" data-rename="${escapeAttr(u.username)}">rename</button>
+            <button class="icon-btn" data-toggle-tier="${escapeAttr(u.username)}" data-current-tier="${escapeAttr(u.tier)}">${u.tier === "admin" ? "make friend" : "make admin"}</button>
+            <button class="icon-btn" data-delete-user="${escapeAttr(u.username)}">delete</button>
+          </div>
         </div>`).join("");
+
+  listEl.querySelectorAll("[data-rename]").forEach((btn) => {
+    btn.onclick = async () => {
+      const username = btn.dataset.rename;
+      const newName = prompt("New display name:");
+      if (!newName) return;
+      try {
+        await api("/admin/edit-user", { method: "POST", needsAuth: true, body: { username, name: newName } });
+        toast("Renamed");
+        loadAdmin();
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  });
+
+  listEl.querySelectorAll("[data-toggle-tier]").forEach((btn) => {
+    btn.onclick = async () => {
+      const username = btn.dataset.toggleTier;
+      const newTier = btn.dataset.currentTier === "admin" ? "friend" : "admin";
+      try {
+        await api("/admin/edit-user", { method: "POST", needsAuth: true, body: { username, tier: newTier } });
+        toast(`${username} is now ${newTier}`);
+        loadAdmin();
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  });
+
+  listEl.querySelectorAll("[data-delete-user]").forEach((btn) => {
+    btn.onclick = async () => {
+      const username = btn.dataset.deleteUser;
+      if (!confirm(`Delete user "${username}"? This can't be undone.`)) return;
+      try {
+        await api("/admin/delete-user", { method: "POST", needsAuth: true, body: { username } });
+        toast("Deleted");
+        loadAdmin();
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  });
 
   document.getElementById("admin-new-tier-pills").querySelectorAll(".pill").forEach((p) => {
     p.onclick = () => {
