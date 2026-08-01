@@ -1638,6 +1638,61 @@ function parseRekordboxXML(xmlText) {
   return tracks;
 }
 
+// Rekordbox's "Export Playlist to TXT" is tab-separated, but the file itself
+// is usually UTF-16 (with a byte-order-mark) rather than UTF-8 — reading it
+// as plain text mangles special characters, so decode by BOM first.
+function decodeRekordboxTextFile(buffer) {
+  const bytes = new Uint8Array(buffer);
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder("utf-16le").decode(bytes.slice(2));
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return new TextDecoder("utf-16be").decode(bytes.slice(2));
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+// Parses a Rekordbox "Export Playlist to TXT" file — tab-separated, header
+// row names columns (varies slightly by Rekordbox version), one track per
+// line after that.
+function parseRekordboxTXT(text) {
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").filter((l) => l.trim() !== "");
+  if (lines.length < 2) return [];
+
+  const headers = lines[0].split("\t").map((h) => h.trim());
+  const colIndex = (...names) => {
+    for (const name of names) {
+      const i = headers.findIndex((h) => h.toLowerCase() === name.toLowerCase());
+      if (i !== -1) return i;
+    }
+    return -1;
+  };
+
+  const trackIdx = colIndex("Track Title", "Name");
+  const artistIdx = colIndex("Artist");
+  const genreIdx = colIndex("Genre");
+  const bpmIdx = colIndex("BPM");
+  const keyIdx = colIndex("Key", "Tonality");
+  const labelIdx = colIndex("Label");
+
+  const tracks = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split("\t");
+    const artist = artistIdx !== -1 ? (cols[artistIdx] || "").trim() : "";
+    const track = trackIdx !== -1 ? (cols[trackIdx] || "").trim() : "";
+    if (!artist && !track) continue;
+    tracks.push({
+      artist,
+      track,
+      genre: genreIdx !== -1 ? (cols[genreIdx] || "").trim() : "",
+      bpm: bpmIdx !== -1 ? (cols[bpmIdx] || "").trim() : "",
+      key: keyIdx !== -1 ? (cols[keyIdx] || "").trim() : "",
+      label: labelIdx !== -1 ? (cols[labelIdx] || "").trim() : "",
+    });
+  }
+  return tracks;
+}
+
 // Simple counter/label, not a hard gate — per spec, just guidance.
 function trackCountGuidance(n) {
   if (n < 15) return "Very small sample";
@@ -1671,13 +1726,15 @@ function renderImport() {
   panelImport.innerHTML = `
     <div class="panel" style="padding:18px; margin-bottom:22px;">
       <p style="color:var(--muted); font-size:11.5px; line-height:1.6; margin:0;">
-        For best results, organize into playlists by vibe/genre in Rekordbox before exporting.
+        For best results, organize into playlists by vibe/genre in Rekordbox before exporting. A full XML
+        collection export or a single playlist exported to TXT both work — TXT is usually the better pick
+        if you want to import just one playlist rather than your whole library.
       </p>
     </div>
 
-    <div class="section-title">✦ Rekordbox XML</div>
+    <div class="section-title">✦ Rekordbox Export (XML or TXT)</div>
     <div class="seed-row">
-      <input class="input" id="import-file-input" type="file" accept=".xml" style="flex:1;" />
+      <input class="input" id="import-file-input" type="file" accept=".xml,.txt" style="flex:1;" />
     </div>
     <div id="import-file-status" style="margin-top:10px; color:var(--muted); font-size:11px;">
       ${hasTracks ? `${imp.fileName} — ${imp.tracks.length} tracks (${trackCountGuidance(imp.tracks.length)})` : ""}
@@ -1728,10 +1785,20 @@ function renderImport() {
     const file = e.target.files[0];
     if (!file) return;
     try {
-      const text = await file.text();
-      const tracks = parseRekordboxXML(text);
+      const isTxt = file.name.toLowerCase().endsWith(".txt");
+      let tracks;
+      if (isTxt) {
+        const buffer = await file.arrayBuffer();
+        const text = decodeRekordboxTextFile(buffer);
+        tracks = parseRekordboxTXT(text);
+      } else {
+        const text = await file.text();
+        tracks = parseRekordboxXML(text);
+      }
       if (tracks.length === 0) {
-        toast("No tracks found in that file's COLLECTION section");
+        toast(isTxt
+          ? "No tracks found — check this is a Rekordbox playlist exported to TXT"
+          : "No tracks found in that file's COLLECTION section");
         return;
       }
       imp.tracks = tracks;
