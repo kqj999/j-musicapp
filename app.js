@@ -12,8 +12,10 @@ const BROWSE_CHANNELS = ["Sandy Techno", "RDH Techno", "Hot Girl Techno", "Goth 
 // State
 // ---------------------------------------------------------------------------
 const state = {
-  authLevel: sessionStorage.getItem("jade_auth_level") || "none", // 'none' | 'guest' | 'admin'
+  authLevel: sessionStorage.getItem("jade_auth_level") || "none", // 'none' | 'guest' | 'view' | 'friend' | 'admin'
   pin: sessionStorage.getItem("jade_pin") || "",
+  name: sessionStorage.getItem("jade_name") || "",
+  username: sessionStorage.getItem("jade_username") || "",
   pinInput: "",
   activeTab: "discover",
 
@@ -134,15 +136,33 @@ function canRunDiscoverBrowse() {
 }
 
 async function submitPin(pin) {
+  const nameInput = document.getElementById("login-name-input");
+  const name = nameInput ? nameInput.value.trim() : "";
   try {
     state.pin = pin;
-    const res = await fetch(WORKER_URL + "/auth", { headers: { "X-Pin": pin } });
+    const headers = { "X-Pin": pin };
+    if (name) headers["X-Name"] = name;
+    const res = await fetch(WORKER_URL + "/auth", { headers });
     const data = await res.json().catch(() => ({}));
     if (!data.level || data.level === "none") throw new Error("invalid");
     state.authLevel = data.level;
+    state.name = data.name || "";
+    state.username = data.username || "";
+
+    if (data.pinIsTemp) {
+      // First login for a named (Admin/Friend) account — force a real PIN
+      // before entering the app. Don't persist a session yet.
+      pinScreen.classList.add("hidden");
+      state.pinInput = "";
+      renderPinDots();
+      showResetPinScreen(state.username, pin);
+      return;
+    }
 
     sessionStorage.setItem("jade_pin", pin);
     sessionStorage.setItem("jade_auth_level", state.authLevel);
+    sessionStorage.setItem("jade_name", state.name);
+    sessionStorage.setItem("jade_username", state.username);
 
     pinScreen.classList.add("hidden");
     appShell.classList.remove("hidden");
@@ -161,16 +181,98 @@ async function submitPin(pin) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Forced PIN reset (first login for a named Admin/Friend account)
+// ---------------------------------------------------------------------------
+const resetPinScreen = document.getElementById("reset-pin-screen");
+const resetPinDotsEl = document.getElementById("reset-pin-dots");
+const resetPinErrorEl = document.getElementById("reset-pin-error");
+let resetPinInput = "";
+let resetPinUsername = "";
+let resetPinCurrentPin = "";
+
+function showResetPinScreen(username, currentPin) {
+  resetPinUsername = username;
+  resetPinCurrentPin = currentPin;
+  resetPinInput = "";
+  resetPinErrorEl.textContent = "";
+  renderResetPinDots();
+  resetPinScreen.classList.remove("hidden");
+}
+
+function renderResetPinDots() {
+  const dots = resetPinDotsEl.querySelectorAll(".pin-dot");
+  dots.forEach((d, i) => {
+    d.classList.toggle("filled", i < resetPinInput.length);
+    d.classList.remove("error");
+  });
+}
+
+document.getElementById("reset-pin-keypad").addEventListener("click", (e) => {
+  const btn = e.target.closest(".pin-key");
+  if (!btn) return;
+  const key = btn.dataset.key;
+  resetPinErrorEl.textContent = "";
+
+  if (key === "back") {
+    resetPinInput = resetPinInput.slice(0, -1);
+  } else if (key === "clear") {
+    resetPinInput = "";
+  } else if (resetPinInput.length < 4) {
+    resetPinInput += key;
+  }
+  renderResetPinDots();
+
+  if (resetPinInput.length === 4) {
+    setTimeout(() => submitNewPin(resetPinInput), 150);
+  }
+});
+
+async function submitNewPin(newPin) {
+  try {
+    const res = await fetch(WORKER_URL + "/auth/set-pin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: resetPinUsername, currentPin: resetPinCurrentPin, newPin }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!data.ok) throw new Error(data.error || "Could not set PIN");
+
+    state.pin = newPin;
+    sessionStorage.setItem("jade_pin", newPin);
+    sessionStorage.setItem("jade_auth_level", state.authLevel);
+    sessionStorage.setItem("jade_name", state.name);
+    sessionStorage.setItem("jade_username", state.username);
+
+    resetPinScreen.classList.add("hidden");
+    appShell.classList.remove("hidden");
+    renderSessionBadge();
+    renderTabLocks();
+    setActiveTab("discover");
+    loadInitialData();
+    toast("PIN set — you\'re in");
+  } catch (err) {
+    resetPinErrorEl.textContent = err.message || "Could not set PIN — try again";
+    resetPinDotsEl.querySelectorAll(".pin-dot").forEach((d) => d.classList.add("error"));
+    resetPinInput = "";
+    setTimeout(renderResetPinDots, 500);
+  }
+}
+
 document.getElementById("btn-lock").onclick = () => {
   sessionStorage.removeItem("jade_pin");
   sessionStorage.removeItem("jade_auth_level");
+  sessionStorage.removeItem("jade_name");
+  sessionStorage.removeItem("jade_username");
   state.pin = "";
   state.authLevel = "none";
+  state.name = "";
+  state.username = "";
   appShell.classList.add("hidden");
   landing.classList.remove("hidden");
 };
 
-const SESSION_BADGE_LABELS = { admin: "admin", view: "view", guest: "guest" };
+const SESSION_BADGE_LABELS = { admin: "admin", friend: "friend", view: "view", guest: "guest" };
 
 function renderSessionBadge() {
   const el = document.getElementById("session-badge");
@@ -661,7 +763,7 @@ async function loadBrowseChannel(channel) {
       };
     });
   } catch (err) {
-    container.innerHTML = `<div class="empty-state">${escapeHtml(err.message)}</div>`;
+    container.innerHTML = errorCardHtml(err.message);
   }
 }
 
@@ -1213,6 +1315,15 @@ async function persistMixes() {
 // ---------------------------------------------------------------------------
 // Utils
 // ---------------------------------------------------------------------------
+function errorCardHtml(message) {
+  return `
+    <div class="error-card">
+      <span class="error-icon">⚠</span>
+      <div class="error-title">Something went wrong</div>
+      <div class="error-message">${escapeHtml(message)}</div>
+    </div>`;
+}
+
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }

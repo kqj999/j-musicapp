@@ -365,6 +365,7 @@ button, input, textarea{
   text-transform:uppercase;
 }
 .session-badge.admin{ color:var(--green); border-color:var(--green); }
+.session-badge.friend{ color:var(--green); border-color:var(--green); }
 .session-badge.view{ color:var(--purple); border-color:var(--purple); }
 .session-badge.guest{ color:var(--pink); border-color:var(--pink); }
 
@@ -530,6 +531,34 @@ button, input, textarea{
   font-size:12px;
 }
 
+.error-card{
+  text-align:center;
+  padding:30px 24px;
+  border:1px solid var(--pink);
+  background:rgba(255,45,139,0.06);
+}
+.error-card .error-icon{
+  font-size:22px;
+  margin-bottom:10px;
+  display:block;
+}
+.error-card .error-title{
+  color:var(--pink);
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  margin-bottom:8px;
+}
+.error-card .error-message{
+  color:#bbb;
+  font-size:11px;
+  line-height:1.6;
+  max-width:320px;
+  margin:0 auto;
+  word-wrap:break-word;
+}
+
 /* ==========================================================================
    BROWSE TAB
    ========================================================================== */
@@ -663,10 +692,12 @@ button, input, textarea{
   padding:12px 22px;
   font-size:11px;
   letter-spacing:0.06em;
-  text-transform:uppercase;
   z-index:10000;
   box-shadow:0 0 20px rgba(179,255,0,0.3);
   animation:toastin 0.2s ease;
+  max-width:min(90vw, 420px);
+  word-wrap:break-word;
+  text-align:center;
 }
 @keyframes toastin{ from{ opacity:0; transform:translate(-50%, 10px);} to{ opacity:1; transform:translate(-50%,0);} }
 
@@ -802,6 +833,7 @@ body.has-player #app{ padding-bottom:100px; }
     <div class="panel panel-glow pin-panel">
       <h2>Enter Pin</h2>
       <p>4-digit access code</p>
+      <input class="input" id="login-name-input" placeholder="Name (leave blank for shared PIN)" style="margin-bottom:16px;" />
       <div class="pin-dots" id="pin-dots">
         <div class="pin-dot"></div><div class="pin-dot"></div>
         <div class="pin-dot"></div><div class="pin-dot"></div>
@@ -823,6 +855,33 @@ body.has-player #app{ padding-bottom:100px; }
       </div>
       <div style="margin-top:20px;">
         <button class="btn btn-ghost btn-sm" id="btn-pin-back">← back to landing</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== FORCED PIN RESET (first login for named accounts) ===================== -->
+  <section id="reset-pin-screen" class="hidden grid-bg">
+    <div class="panel panel-glow pin-panel">
+      <h2>Set Your PIN</h2>
+      <p>First login — choose a real 4-digit PIN</p>
+      <div class="pin-dots" id="reset-pin-dots">
+        <div class="pin-dot"></div><div class="pin-dot"></div>
+        <div class="pin-dot"></div><div class="pin-dot"></div>
+      </div>
+      <div class="pin-error-msg" id="reset-pin-error"></div>
+      <div class="pin-keypad" id="reset-pin-keypad">
+        <button class="btn pin-key" data-key="1">1</button>
+        <button class="btn pin-key" data-key="2">2</button>
+        <button class="btn pin-key" data-key="3">3</button>
+        <button class="btn pin-key" data-key="4">4</button>
+        <button class="btn pin-key" data-key="5">5</button>
+        <button class="btn pin-key" data-key="6">6</button>
+        <button class="btn pin-key" data-key="7">7</button>
+        <button class="btn pin-key" data-key="8">8</button>
+        <button class="btn pin-key" data-key="9">9</button>
+        <button class="btn btn-ghost pin-key" data-key="back">⌫</button>
+        <button class="btn pin-key" data-key="0">0</button>
+        <button class="btn btn-ghost pin-key" data-key="clear">✕</button>
       </div>
     </div>
   </section>
