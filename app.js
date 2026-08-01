@@ -24,6 +24,7 @@ const state = {
   crate: { lists: [], activeListIndex: 0, loading: false },
   mixes: { list: [], loading: false },
   profile: null,
+  adminUsers: [],
 };
 
 BROWSE_CHANNELS.forEach((c) => (state.browse.channels[c] = { tracks: [], loading: false }));
@@ -83,6 +84,7 @@ document.getElementById("btn-goto-mixes").onclick = () => {
   renderSessionBadge();
   renderTabLocks();
   renderProfileTabVisibility();
+  renderAdminTabVisibility();
 };
 
 document.getElementById("btn-goto-pin").onclick = () => {
@@ -174,6 +176,7 @@ async function submitPin(pin) {
   renderSessionBadge();
   renderTabLocks();
   renderProfileTabVisibility();
+  renderAdminTabVisibility();
     setActiveTab("discover");
     loadInitialData();
   } catch {
@@ -253,6 +256,7 @@ async function submitNewPin(newPin) {
   renderSessionBadge();
   renderTabLocks();
   renderProfileTabVisibility();
+  renderAdminTabVisibility();
     setActiveTab("discover");
     loadInitialData();
     toast("PIN set — you\'re in");
@@ -298,6 +302,14 @@ function renderProfileTabVisibility() {
   if (btn) btn.classList.toggle("hidden", !state.username);
 }
 
+// Admin tab is admin-tier only (works with either the flat APP_PIN fallback
+// or a named admin login — user management doesn't need to know "which
+// admin", unlike Profile).
+function renderAdminTabVisibility() {
+  const btn = document.querySelector('.tab-btn[data-tab="admin"]');
+  if (btn) btn.classList.toggle("hidden", state.authLevel !== "admin");
+}
+
 // If a PIN session already exists (page reload), resume it
 if (state.authLevel !== "none" && state.pin) {
   landing.classList.add("hidden");
@@ -305,6 +317,7 @@ if (state.authLevel !== "none" && state.pin) {
   renderSessionBadge();
   renderTabLocks();
   renderProfileTabVisibility();
+  renderAdminTabVisibility();
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +337,7 @@ function setActiveTab(tab) {
   if (tab === "crate") renderCrate();
   if (tab === "mixes") renderMixes();
   if (tab === "profile") loadProfile();
+  if (tab === "admin") loadAdmin();
 }
 
 function loadInitialData() {
@@ -1451,6 +1465,84 @@ function renderProfile() {
       document.getElementById("profile-api-key").value = "";
       toast("API key saved");
       renderProfile();
+    } catch (err) {
+      toast(err.message);
+    }
+  };
+}
+
+// ============================================================================
+// ADMIN TAB
+// ============================================================================
+const panelAdmin = document.getElementById("panel-admin");
+let adminSelectedTier = "friend";
+
+async function loadAdmin() {
+  try {
+    const data = await api("/admin/users", { needsAuth: true });
+    state.adminUsers = data.users || [];
+  } catch (err) {
+    toast(err.message);
+  }
+  renderAdmin();
+}
+
+function renderAdmin() {
+  const users = state.adminUsers || [];
+
+  panelAdmin.innerHTML = `
+    <div class="section-title">✦ Users</div>
+    <div id="admin-user-list"></div>
+
+    <div class="section-title" style="margin-top:28px;">✦ Create User</div>
+    <div class="seed-row">
+      <input class="input" id="admin-new-username" placeholder="username (lowercase, no spaces)" />
+      <input class="input" id="admin-new-name" placeholder="Display name" />
+    </div>
+    <div class="seed-row" style="margin-top:10px; align-items:center;">
+      <input class="input" id="admin-new-temppin" placeholder="Temp PIN" style="flex:1;" />
+      <div class="pill-row" id="admin-new-tier-pills" style="margin-bottom:0;">
+        <button type="button" class="pill ${adminSelectedTier === "friend" ? "active" : ""}" data-tier="friend">Friend</button>
+        <button type="button" class="pill ${adminSelectedTier === "admin" ? "active" : ""}" data-tier="admin">Admin</button>
+      </div>
+      <button class="btn btn-sm btn-primary" id="btn-create-user">Create</button>
+    </div>
+  `;
+
+  const listEl = document.getElementById("admin-user-list");
+  listEl.innerHTML = users.length === 0
+    ? `<div class="empty-state">No users yet</div>`
+    : users.map((u) => `
+        <div class="channel-track">
+          <div class="track-info">
+            <div class="track-title">${escapeHtml(u.name)} <span style="color:var(--muted);">(${escapeHtml(u.username)})</span></div>
+            <div class="track-meta">${escapeHtml(u.tier)}${u.pinIsTemp ? " · temp PIN not yet set" : ""}</div>
+          </div>
+        </div>`).join("");
+
+  document.getElementById("admin-new-tier-pills").querySelectorAll(".pill").forEach((p) => {
+    p.onclick = () => {
+      adminSelectedTier = p.dataset.tier;
+      renderAdmin();
+    };
+  });
+
+  document.getElementById("btn-create-user").onclick = async () => {
+    const username = document.getElementById("admin-new-username").value.trim();
+    const name = document.getElementById("admin-new-name").value.trim();
+    const tempPin = document.getElementById("admin-new-temppin").value.trim();
+    if (!username || !name || !tempPin) {
+      toast("Fill in username, name, and a temp PIN");
+      return;
+    }
+    try {
+      await api("/admin/create-user", {
+        method: "POST",
+        needsAuth: true,
+        body: { username, name, tempPin, tier: adminSelectedTier },
+      });
+      toast(`Created ${name} as ${adminSelectedTier}`);
+      loadAdmin();
     } catch (err) {
       toast(err.message);
     }
