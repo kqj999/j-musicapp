@@ -1038,10 +1038,13 @@ function renderCrateSidebar() {
           <div class="section-box-preview">
             ${preview.length === 0
               ? `<div class="crate-tree-empty">${sec.key === "lists" || sec.key === "vibes" ? "Nothing here yet" : "Coming in a future step"}</div>`
-              : preview.map((item) => `
-                  <div class="section-box-preview-item" data-open-item="${sec.key}" data-item-id="${escapeAttr(String(item.id))}">
-                    ${escapeHtml(item.label)}
-                  </div>`).join("")
+              : preview.map((item) => {
+                  const isOpen = isActive && String(item.id) === String(c.activeItemId);
+                  return `
+                  <div class="section-box-preview-item ${isOpen ? "open" : ""}" data-open-item="${sec.key}" data-item-id="${escapeAttr(String(item.id))}">
+                    ${isOpen ? '<span class="star filled">★</span> ' : ""}${escapeHtml(item.label)}
+                  </div>`;
+                }).join("")
             }
           </div>
         ` : ""}
