@@ -28,6 +28,7 @@ const state = {
     vibesList: [], vibesLoaded: false,
     expanded: { lists: true, vibes: false, genres: false, imports: false },
     sort: { lists: { col: "name", dir: "asc" }, vibes: { col: "name", dir: "asc" } },
+    genresList: [], uncategorizedCount: 0, genresLoaded: false,
     trackViewSort: { col: null, dir: "asc" },
     editMode: false,
     trackSearchQuery: "",
@@ -372,6 +373,7 @@ function loadInitialData() {
     loadPublicCrate();
   }
   loadCrateVibes();
+  loadCrateGenres();
   loadMixes();
 }
 
@@ -955,6 +957,27 @@ async function loadCrateVibes() {
   if (state.activeTab === "crate") renderCrate();
 }
 
+// Genre is computed from Uploads, not its own stored entity like Vibes —
+// same load pattern, different endpoint.
+async function loadCrateGenres() {
+  if (!state.username) {
+    state.crate.genresList = [];
+    state.crate.uncategorizedCount = 0;
+    state.crate.genresLoaded = true;
+    return;
+  }
+  try {
+    const data = await api("/genres", { needsAuth: true });
+    state.crate.genresList = data.genres || [];
+    state.crate.uncategorizedCount = data.uncategorizedCount || 0;
+  } catch (err) {
+    state.crate.genresList = [];
+    state.crate.uncategorizedCount = 0;
+  }
+  state.crate.genresLoaded = true;
+  if (state.activeTab === "crate") renderCrate();
+}
+
 async function persistCrate() {
   if (state.authLevel !== "admin") return;
   try {
@@ -1015,6 +1038,10 @@ function crateSectionPreviewItems(key) {
   if (key === "vibes") {
     return c.vibesList.slice(0, 5).map((v) => ({ id: v.id, label: v.name }));
   }
+  if (key === "genres") {
+    const items = c.uncategorizedCount > 0 ? [{ id: "Uncategorized", label: "Uncategorized" }] : [];
+    return items.concat(c.genresList.slice(0, Math.max(0, 5 - items.length)).map((g) => ({ id: g.name, label: g.name })));
+  }
   return [];
 }
 
@@ -1041,7 +1068,7 @@ function renderCrateSidebar() {
         ${expanded ? `
           <div class="section-box-preview">
             ${preview.length === 0
-              ? `<div class="crate-tree-empty">${sec.key === "lists" || sec.key === "vibes" ? "Nothing here yet" : "Coming in a future step"}</div>`
+              ? `<div class="crate-tree-empty">${sec.key === "lists" || sec.key === "vibes" || sec.key === "genres" ? "Nothing here yet" : "Coming in a future step"}</div>`
               : preview.map((item) => {
                   const isOpen = isActive && String(item.id) === String(c.activeItemId);
                   return `
@@ -1128,11 +1155,16 @@ function renderCrateListView(el, section) {
   const c = state.crate;
   const sectionLabel = CRATE_SECTIONS.find((s) => s.key === section).label;
 
-  if (section === "genres" || section === "imports") {
+  if (section === "imports") {
     el.innerHTML = `
       <div class="channel-head"><h4 class="crate-heading">${escapeHtml(sectionLabel)}</h4></div>
       <div class="empty-state" style="padding:40px 0;">Coming in a future step</div>
     `;
+    return;
+  }
+
+  if (section === "genres") {
+    renderCrateGenresListView(el);
     return;
   }
 
@@ -1197,6 +1229,50 @@ function renderCrateListView(el, section) {
   }
 }
 
+// Genres is a simple two-column list-view (no "Last Updated" — Genre is
+// computed from Uploads, not its own stored entity, so there's no natural
+// per-folder timestamp to show). Uncategorized is pinned first when present.
+function renderCrateGenresListView(el) {
+  const genres = state.crate.genresList;
+  const uncatCount = state.crate.uncategorizedCount;
+
+  el.innerHTML = `
+    <div class="channel-head"><h4 class="crate-heading">Genres</h4></div>
+    ${genres.length === 0 && uncatCount === 0 ? `<div class="empty-state" style="padding:40px 0;">Nothing here yet</div>` : `
+      <table class="crate-list-table">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th># of Tracks</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${uncatCount > 0 ? `
+            <tr class="crate-list-row" data-open-genre="Uncategorized">
+              <td><em>Uncategorized</em></td>
+              <td>${uncatCount}</td>
+            </tr>
+          ` : ""}
+          ${genres.map((g) => `
+            <tr class="crate-list-row" data-open-genre="${escapeAttr(g.name)}">
+              <td>${escapeHtml(g.name)}</td>
+              <td>${g.trackCount}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `}
+  `;
+
+  el.querySelectorAll("[data-open-genre]").forEach((row) => {
+    row.onclick = () => {
+      state.crate.activeItemId = row.dataset.openGenre;
+      renderCrateMain();
+      renderCrateSidebar();
+    };
+  });
+}
+
 function crateCreateNewList() {
   const name = prompt("List name:", "Untitled List");
   if (!name) return;
@@ -1244,6 +1320,11 @@ function renderCrateMain() {
 
   if (section === "vibes") {
     loadCrateVibeDetail(el);
+    return;
+  }
+
+  if (section === "genres") {
+    loadCrateGenreDetail(el);
     return;
   }
 
@@ -1550,6 +1631,57 @@ function setupVibeDragReorder(container, vibe, el) {
 // ---------------------------------------------------------------------------
 // List track-view
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Genre track-view — read-only browsing for Step 1 (mass-assign/reassign
+// comes in Step 2). No rename/delete/description — Genre isn't a stored
+// entity, it's computed live from Uploads' own genre field.
+// ---------------------------------------------------------------------------
+
+async function loadCrateGenreDetail(el) {
+  el.innerHTML = `<div class="empty-state"><span class="spinner"></span> Loading...</div>`;
+  try {
+    const detail = await api(`/genres/${encodeURIComponent(state.crate.activeItemId)}`, { needsAuth: true });
+    renderCrateGenreDetail(el, detail);
+  } catch (err) {
+    el.innerHTML = errorCardHtml(err.message);
+  }
+}
+
+function renderCrateGenreDetail(el, genre) {
+  crateResetTrackViewIfNewItem(`genres:${genre.name}`);
+
+  const rows = crateFilterAndSortTracks(genre.tracks);
+
+  el.innerHTML = `
+    <div class="channel-head">
+      <h4 class="crate-heading">${escapeHtml(genre.name)}</h4>
+      <button class="icon-btn" id="btn-back-to-genres">← all genres</button>
+    </div>
+
+    <div class="track-meta-row">${genre.tracks.length} track${genre.tracks.length === 1 ? "" : "s"}</div>
+
+    <div class="seed-row" style="margin-top:14px;">
+      <input class="input" id="track-search" placeholder="Search tracks..." value="${escapeAttr(state.crate.trackSearchQuery)}" style="flex:1;" />
+    </div>
+
+    <div id="genre-tracks" style="margin-top:12px;"></div>
+  `;
+
+  document.getElementById("genre-tracks").innerHTML = crateTrackTableHtml(rows, { dragEnabled: false, showRemove: false });
+  crateWireTrackSortHeaders(el, () => renderCrateGenreDetail(el, genre));
+
+  document.getElementById("track-search").oninput = (e) => {
+    state.crate.trackSearchQuery = e.target.value;
+    renderCrateGenreDetail(el, genre);
+  };
+
+  document.getElementById("btn-back-to-genres").onclick = () => {
+    state.crate.activeItemId = null;
+    renderCrateMain();
+    renderCrateSidebar();
+  };
+}
 
 function renderCrateMainList(el, isAdmin) {
   const list = state.crate.lists[state.crate.activeItemId];
