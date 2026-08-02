@@ -29,6 +29,8 @@ const state = {
     expanded: { lists: true, vibes: false, genres: false, imports: false },
     sort: { lists: { col: "name", dir: "asc" }, vibes: { col: "name", dir: "asc" } },
     genresList: [], uncategorizedCount: 0, genresLoaded: false,
+    genresListEditMode: false, selectedGenreNames: new Set(),
+    selectedTrackIds: new Set(), pendingNewGenreName: null,
     trackViewSort: { col: null, dir: "asc" },
     editMode: false,
     trackSearchQuery: "",
@@ -1235,13 +1237,27 @@ function renderCrateListView(el, section) {
 function renderCrateGenresListView(el) {
   const genres = state.crate.genresList;
   const uncatCount = state.crate.uncategorizedCount;
+  const editMode = state.crate.genresListEditMode;
 
   el.innerHTML = `
-    <div class="channel-head"><h4 class="crate-heading">Genres</h4></div>
+    <div class="channel-head">
+      <h4 class="crate-heading">Genres</h4>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-sm btn-primary" id="btn-create-genre">+ Create Genre</button>
+        ${genres.length > 0 ? `<button class="icon-btn" id="btn-genres-edit-mode">${editMode ? "done" : "edit"}</button>` : ""}
+      </div>
+    </div>
+    ${editMode ? `
+      <div class="seed-row" style="margin-top:10px; align-items:center;">
+        <button class="btn btn-sm" id="btn-delete-selected-genres">Delete Selected</button>
+        <span id="genres-selected-count" style="color:var(--muted); font-size:10.5px;"></span>
+      </div>
+    ` : ""}
     ${genres.length === 0 && uncatCount === 0 ? `<div class="empty-state" style="padding:40px 0;">Nothing here yet</div>` : `
-      <table class="crate-list-table">
+      <table class="crate-list-table" style="margin-top:14px;">
         <thead>
           <tr>
+            ${editMode ? `<th><input type="checkbox" id="genres-select-all" ${genres.length > 0 && genres.every((g) => state.crate.selectedGenreNames.has(g.name)) ? "checked" : ""} /></th>` : ""}
             <th>Title</th>
             <th># of Tracks</th>
           </tr>
@@ -1249,12 +1265,14 @@ function renderCrateGenresListView(el) {
         <tbody>
           ${uncatCount > 0 ? `
             <tr class="crate-list-row" data-open-genre="Uncategorized">
+              ${editMode ? `<td></td>` : ""}
               <td><em>Uncategorized</em></td>
               <td>${uncatCount}</td>
             </tr>
           ` : ""}
           ${genres.map((g) => `
             <tr class="crate-list-row" data-open-genre="${escapeAttr(g.name)}">
+              ${editMode ? `<td><input type="checkbox" class="genre-select-checkbox" data-genre-name="${escapeAttr(g.name)}" ${state.crate.selectedGenreNames.has(g.name) ? "checked" : ""} /></td>` : ""}
               <td>${escapeHtml(g.name)}</td>
               <td>${g.trackCount}</td>
             </tr>
@@ -1265,12 +1283,91 @@ function renderCrateGenresListView(el) {
   `;
 
   el.querySelectorAll("[data-open-genre]").forEach((row) => {
-    row.onclick = () => {
+    row.onclick = (e) => {
+      if (e.target.type === "checkbox") return;
       state.crate.activeItemId = row.dataset.openGenre;
       renderCrateMain();
       renderCrateSidebar();
     };
   });
+
+  document.getElementById("btn-create-genre").onclick = crateCreateNewGenre;
+
+  const editBtn = document.getElementById("btn-genres-edit-mode");
+  if (editBtn) {
+    editBtn.onclick = () => {
+      state.crate.genresListEditMode = !state.crate.genresListEditMode;
+      state.crate.selectedGenreNames = new Set();
+      renderCrateGenresListView(el);
+    };
+  }
+
+  if (editMode) {
+    crateUpdateGenresSelectedCount();
+
+    el.querySelectorAll(".genre-select-checkbox").forEach((cb) => {
+      cb.onchange = () => {
+        if (cb.checked) state.crate.selectedGenreNames.add(cb.dataset.genreName);
+        else state.crate.selectedGenreNames.delete(cb.dataset.genreName);
+        crateUpdateGenresSelectedCount();
+      };
+    });
+
+    const selectAllCb = document.getElementById("genres-select-all");
+    if (selectAllCb) {
+      selectAllCb.onchange = () => {
+        if (selectAllCb.checked) genres.forEach((g) => state.crate.selectedGenreNames.add(g.name));
+        else state.crate.selectedGenreNames.clear();
+        renderCrateGenresListView(el);
+      };
+    }
+
+    document.getElementById("btn-delete-selected-genres").onclick = async () => {
+      const names = [...state.crate.selectedGenreNames];
+      if (names.length === 0) {
+        toast("Select at least one genre");
+        return;
+      }
+      if (!confirm(`Delete ${names.length} genre(s)? Tracks inside move to Uncategorized.`)) return;
+      try {
+        for (const name of names) {
+          const detail = await api(`/genres/${encodeURIComponent(name)}`, { needsAuth: true });
+          const ids = detail.tracks.map((t) => t.id);
+          if (ids.length > 0) {
+            await api("/genres/assign", { method: "POST", needsAuth: true, body: { uploadIds: ids, genre: "" } });
+          }
+        }
+        state.crate.selectedGenreNames = new Set();
+        toast("Deleted");
+        await loadCrateGenres();
+        renderCrateMain();
+        renderCrateSidebar();
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  }
+}
+
+function crateUpdateGenresSelectedCount() {
+  const el = document.getElementById("genres-selected-count");
+  if (el) el.textContent = `${state.crate.selectedGenreNames.size} selected`;
+}
+
+// "+ Create Genre" from the list-view: since Genre only exists once it has
+// tracks (no empty placeholder), this stages the new name and jumps into
+// Uncategorized with Edit mode on, ready to select tracks and move them in.
+function crateCreateNewGenre() {
+  const name = prompt("New genre name:");
+  if (!name || !name.trim()) return;
+  state.crate.pendingNewGenreName = name.trim();
+  state.crate.activeSection = "genres";
+  state.crate.activeItemId = "Uncategorized";
+  state.crate.editMode = true;
+  state.crate.selectedTrackIds = new Set();
+  renderCrateMain();
+  renderCrateSidebar();
+  toast(`Select tracks below, then move them to "${name.trim()}"`);
 }
 
 function crateCreateNewList() {
@@ -1347,6 +1444,7 @@ function crateResetTrackViewIfNewItem(key) {
     state.crate.editMode = false;
     state.crate.trackSearchQuery = "";
     state.crate.trackViewSort = { col: null, dir: "asc" };
+    state.crate.selectedTrackIds = new Set();
     state.crate._lastItemKey = key;
   }
 }
@@ -1390,15 +1488,17 @@ function crateCanReorder() {
 
 // Builds the Rekordbox-style sortable table. `showRemove` controls the trailing
 // delete column (Edit mode only); `dragEnabled` controls the drag handle column.
-function crateTrackTableHtml(rows, { dragEnabled, showRemove }) {
+function crateTrackTableHtml(rows, { dragEnabled, showRemove, checkboxEnabled, selectedIds }) {
   if (rows.length === 0) {
     return `<div class="empty-state">${state.crate.trackSearchQuery ? "No matches" : "No tracks yet"}</div>`;
   }
+  const allSelected = checkboxEnabled && rows.length > 0 && rows.every((t) => selectedIds.has(t.id));
   return `
     <table class="crate-track-table">
       <thead>
         <tr>
           ${dragEnabled ? `<th></th>` : ""}
+          ${checkboxEnabled ? `<th><input type="checkbox" id="track-select-all" ${allSelected ? "checked" : ""} /></th>` : ""}
           <th data-track-sort-col="track">Track Title${crateTrackSortIndicator("track")}</th>
           <th data-track-sort-col="artist">Artist${crateTrackSortIndicator("artist")}</th>
           <th data-track-sort-col="bpm">BPM${crateTrackSortIndicator("bpm")}</th>
@@ -1413,6 +1513,7 @@ function crateTrackTableHtml(rows, { dragEnabled, showRemove }) {
         ${rows.map((t) => `
           <tr draggable="${dragEnabled}" data-track-orig-i="${t.__i}">
             ${dragEnabled ? `<td class="drag-handle-cell">⠿</td>` : ""}
+            ${checkboxEnabled ? `<td><input type="checkbox" class="track-select-checkbox" data-track-id="${escapeAttr(t.id)}" ${selectedIds.has(t.id) ? "checked" : ""} /></td>` : ""}
             <td class="track-cell-title">${escapeHtml(t.track || "—")}</td>
             <td class="track-cell-artist">${escapeHtml(t.artist || "—")}</td>
             <td>${escapeHtml(t.bpm ? String(t.bpm) : "—")}</td>
@@ -1651,12 +1752,16 @@ async function loadCrateGenreDetail(el) {
 function renderCrateGenreDetail(el, genre) {
   crateResetTrackViewIfNewItem(`genres:${genre.name}`);
 
+  const editMode = state.crate.editMode;
   const rows = crateFilterAndSortTracks(genre.tracks);
 
   el.innerHTML = `
     <div class="channel-head">
       <h4 class="crate-heading">${escapeHtml(genre.name)}</h4>
-      <button class="icon-btn" id="btn-back-to-genres">← all genres</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="icon-btn" id="btn-back-to-genres">← all genres</button>
+        <button class="icon-btn" id="btn-edit-mode">${editMode ? "done" : "edit"}</button>
+      </div>
     </div>
 
     <div class="track-meta-row">${genre.tracks.length} track${genre.tracks.length === 1 ? "" : "s"}</div>
@@ -1665,10 +1770,27 @@ function renderCrateGenreDetail(el, genre) {
       <input class="input" id="track-search" placeholder="Search tracks..." value="${escapeAttr(state.crate.trackSearchQuery)}" style="flex:1;" />
     </div>
 
+    ${editMode ? `
+      <div class="seed-row" style="margin-top:10px; align-items:center;">
+        <select class="input" id="genre-move-target" style="flex:1;">
+          <option value="">Move selected to...</option>
+          ${state.crate.pendingNewGenreName ? `<option value="${escapeAttr(state.crate.pendingNewGenreName)}" selected>+ ${escapeHtml(state.crate.pendingNewGenreName)} (new)</option>` : ""}
+          <option value="__new__">+ Create new genre...</option>
+          <option value="Uncategorized">Uncategorized</option>
+          ${state.crate.genresList.filter((g) => g.name !== genre.name).map((g) => `<option value="${escapeAttr(g.name)}">${escapeHtml(g.name)}</option>`).join("")}
+        </select>
+        <button class="btn btn-sm" id="btn-apply-genre-move">Apply</button>
+      </div>
+      <div style="margin-top:6px; color:var(--muted); font-size:10.5px;" id="genre-selected-count"></div>
+    ` : ""}
+
     <div id="genre-tracks" style="margin-top:12px;"></div>
   `;
 
-  document.getElementById("genre-tracks").innerHTML = crateTrackTableHtml(rows, { dragEnabled: false, showRemove: false });
+  document.getElementById("genre-tracks").innerHTML = crateTrackTableHtml(rows, {
+    dragEnabled: false, showRemove: false,
+    checkboxEnabled: editMode, selectedIds: state.crate.selectedTrackIds,
+  });
   crateWireTrackSortHeaders(el, () => renderCrateGenreDetail(el, genre));
 
   document.getElementById("track-search").oninput = (e) => {
@@ -1678,9 +1800,75 @@ function renderCrateGenreDetail(el, genre) {
 
   document.getElementById("btn-back-to-genres").onclick = () => {
     state.crate.activeItemId = null;
+    state.crate.pendingNewGenreName = null;
     renderCrateMain();
     renderCrateSidebar();
   };
+
+  document.getElementById("btn-edit-mode").onclick = () => {
+    state.crate.editMode = !state.crate.editMode;
+    state.crate.selectedTrackIds = new Set();
+    renderCrateGenreDetail(el, genre);
+  };
+
+  if (editMode) {
+    crateUpdateGenreSelectedCount();
+
+    document.querySelectorAll(".track-select-checkbox").forEach((cb) => {
+      cb.onchange = () => {
+        if (cb.checked) state.crate.selectedTrackIds.add(cb.dataset.trackId);
+        else state.crate.selectedTrackIds.delete(cb.dataset.trackId);
+        crateUpdateGenreSelectedCount();
+      };
+    });
+
+    const selectAllCb = document.getElementById("track-select-all");
+    if (selectAllCb) {
+      selectAllCb.onchange = () => {
+        if (selectAllCb.checked) rows.forEach((t) => state.crate.selectedTrackIds.add(t.id));
+        else rows.forEach((t) => state.crate.selectedTrackIds.delete(t.id));
+        renderCrateGenreDetail(el, genre);
+      };
+    }
+
+    document.getElementById("btn-apply-genre-move").onclick = async () => {
+      const target = document.getElementById("genre-move-target").value;
+      if (!target) {
+        toast("Pick a target first");
+        return;
+      }
+      if (state.crate.selectedTrackIds.size === 0) {
+        toast("Select at least one track");
+        return;
+      }
+      let newGenre = target;
+      if (target === "__new__") {
+        const name = prompt("New genre name:");
+        if (!name || !name.trim()) return;
+        newGenre = name.trim();
+      } else if (target === "Uncategorized") {
+        newGenre = "";
+      }
+      try {
+        await api("/genres/assign", {
+          method: "POST", needsAuth: true,
+          body: { uploadIds: [...state.crate.selectedTrackIds], genre: newGenre },
+        });
+        toast(`Moved ${state.crate.selectedTrackIds.size} track(s)`);
+        state.crate.selectedTrackIds = new Set();
+        state.crate.pendingNewGenreName = null;
+        await loadCrateGenres();
+        loadCrateGenreDetail(el);
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  }
+}
+
+function crateUpdateGenreSelectedCount() {
+  const el = document.getElementById("genre-selected-count");
+  if (el) el.textContent = `${state.crate.selectedTrackIds.size} selected`;
 }
 
 function renderCrateMainList(el, isAdmin) {
