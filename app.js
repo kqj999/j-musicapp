@@ -20,7 +20,7 @@ const state = {
   activeTab: "discover",
 
   discover: { activeVibe: null, seeds: [], directions: null, savedTracks: [], loading: false },
-  browse: { channels: {} }, // channel -> { tracks: [], loading }
+  browse: { channels: {}, fixedChannels: [], vibeSlots: [], vibesList: [], configLoaded: false }, // channel key -> { tracks: [], loading }
   crate: { lists: [], activeListIndex: 0, loading: false },
   mixes: { list: [], loading: false },
   profile: null,
@@ -132,14 +132,15 @@ document.getElementById("pin-keypad").addEventListener("click", (e) => {
   }
 });
 
-// Tiers: 'admin' (full access), 'view' (sees Discover/Browse UI as a preview,
-// but can't actually run searches — no credits spent), 'guest' (Discover/Browse
-// stay behind a locked teaser), 'none'.
+// Tiers: 'admin' (full access), 'friend' (own API key, own tier-limited
+// channels), 'view' (sees Discover/Browse UI as a preview, but can't
+// actually run searches — no credits spent), 'guest' (Discover/Browse stay
+// behind a locked teaser), 'none'.
 function discoverBrowseVisible() {
-  return state.authLevel === "admin" || state.authLevel === "view";
+  return state.authLevel === "admin" || state.authLevel === "view" || state.authLevel === "friend";
 }
 function canRunDiscoverBrowse() {
-  return state.authLevel === "admin";
+  return state.authLevel === "admin" || state.authLevel === "friend";
 }
 
 async function submitPin(pin) {
@@ -345,7 +346,7 @@ function setActiveTab(tab) {
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + tab));
 
   if (tab === "discover") renderDiscover();
-  if (tab === "browse") renderBrowse();
+  if (tab === "browse") loadBrowse();
   if (tab === "crate") renderCrate();
   if (tab === "mixes") renderMixes();
   if (tab === "profile") loadProfile();
@@ -727,12 +728,64 @@ function renderSavedStrip(containerId) {
 // ============================================================================
 const panelBrowse = document.getElementById("panel-browse");
 
+async function loadBrowse() {
+  if (!discoverBrowseVisible()) {
+    renderBrowse();
+    return;
+  }
+  try {
+    const data = await api("/browse-config", { needsAuth: true });
+    state.browse.fixedChannels = data.fixedChannels || [];
+    state.browse.vibeSlots = data.browseVibeSlots || [];
+    state.browse.vibesList = data.vibesList || [];
+  } catch (err) {
+    toast(err.message);
+    state.browse.fixedChannels = BROWSE_CHANNELS;
+  }
+  state.browse.configLoaded = true;
+  renderBrowse();
+}
+
+// Combines this tier's fixed channels with any Vibe-based custom channels
+// (Friend only) into one flat list of renderable entries.
+function buildBrowseEntries() {
+  const fixedNames = state.browse.fixedChannels.length ? state.browse.fixedChannels : BROWSE_CHANNELS;
+  const fixed = fixedNames.map((name) => ({ key: `fixed:${name}`, label: name, kind: "fixed", channel: name }));
+  const vibeEntries = (state.browse.vibeSlots || [])
+    .map((id) => state.browse.vibesList.find((v) => v.id === id))
+    .filter(Boolean)
+    .map((v) => ({ key: `vibe:${v.id}`, label: `✦ ${v.name}`, kind: "vibe", vibeId: v.id }));
+  return [...fixed, ...vibeEntries];
+}
+
+function renderVibeSlotPickerHtml() {
+  const vibes = state.browse.vibesList || [];
+  const slots = state.browse.vibeSlots || [];
+  const optionsFor = (selectedId) => `
+    <option value="">— none —</option>
+    ${vibes.map((v) => `<option value="${escapeAttr(v.id)}" ${v.id === selectedId ? "selected" : ""}>${escapeHtml(v.name)} (${v.trackCount})</option>`).join("")}
+  `;
+  return `
+    <div class="panel" style="padding:16px; margin-bottom:18px;">
+      <div class="section-title" style="margin-bottom:10px;">✦ Your Custom Channels <span style="color:var(--muted); font-weight:400; text-transform:none;">(up to 3, from your Vibes)</span></div>
+      ${vibes.length === 0 ? `<div class="empty-state" style="padding:0;">Import some tracks first to create Vibes</div>` : `
+        <div class="seed-row">
+          <select class="input" id="vibe-slot-0" style="flex:1;">${optionsFor(slots[0])}</select>
+          <select class="input" id="vibe-slot-1" style="flex:1;">${optionsFor(slots[1])}</select>
+          <select class="input" id="vibe-slot-2" style="flex:1;">${optionsFor(slots[2])}</select>
+          <button class="btn btn-sm" id="btn-save-vibe-slots">Save</button>
+        </div>
+      `}
+    </div>
+  `;
+}
+
 function renderBrowse() {
   if (!discoverBrowseVisible()) {
     panelBrowse.innerHTML = `
       <div class="panel locked-teaser">
         <h3>🔒 Browse</h3>
-        <p>Six curated genre channels — Sandy Techno, RDH, Hot Girl Techno, Goth Girl Techno, Cool Remixes, House Cat — refreshed on demand.</p>
+        <p>Curated genre channels — refreshed on demand.</p>
         <button class="btn" id="teaser-pin-browse">Enter Pin</button>
       </div>`;
     document.getElementById("teaser-pin-browse").onclick = () => {
@@ -742,43 +795,77 @@ function renderBrowse() {
     return;
   }
 
-  panelBrowse.innerHTML = `<div class="channel-grid">
-    ${BROWSE_CHANNELS.map((ch) => `
-      <div class="panel channel-card" id="channel-${slug(ch)}">
-        <div class="channel-head">
-          <h4>${escapeHtml(ch)}</h4>
-          <button class="icon-btn" data-channel="${ch}" ${canRunDiscoverBrowse() ? "" : "disabled"}>↻ refresh</button>
+  if (!state.browse.configLoaded) {
+    panelBrowse.innerHTML = `<div class="empty-state"><span class="spinner"></span> Loading...</div>`;
+    return;
+  }
+
+  const isFriend = state.authLevel === "friend";
+  const entries = buildBrowseEntries();
+  entries.forEach((e) => {
+    if (!state.browse.channels[e.key]) state.browse.channels[e.key] = { tracks: [], loading: false };
+  });
+
+  panelBrowse.innerHTML = `
+    ${isFriend ? renderVibeSlotPickerHtml() : ""}
+    <div class="channel-grid">
+      ${entries.map((e) => `
+        <div class="panel channel-card" id="channel-${slug(e.key)}">
+          <div class="channel-head">
+            <h4>${escapeHtml(e.label)}</h4>
+            <button class="icon-btn" data-channel-key="${escapeAttr(e.key)}" ${canRunDiscoverBrowse() ? "" : "disabled"}>↻ refresh</button>
+          </div>
+          <div class="channel-body">
+            <div class="empty-state">Tap refresh to generate suggestions</div>
+          </div>
         </div>
-        <div class="channel-body">
-          <div class="empty-state">Tap refresh to generate suggestions</div>
-        </div>
-      </div>
-    `).join("")}
-  </div>
-  <div id="saved-container-browse"></div>`;
+      `).join("")}
+    </div>
+    <div id="saved-container-browse"></div>
+  `;
 
   renderSavedStrip("saved-container-browse");
 
-  panelBrowse.querySelectorAll(".icon-btn").forEach((btn) => {
-    btn.onclick = () => loadBrowseChannel(btn.dataset.channel);
+  panelBrowse.querySelectorAll("[data-channel-key]").forEach((btn) => {
+    btn.onclick = () => {
+      const entry = entries.find((e) => e.key === btn.dataset.channelKey);
+      if (entry) loadBrowseChannel(entry);
+    };
   });
+
+  if (isFriend && state.browse.vibesList.length > 0) {
+    document.getElementById("btn-save-vibe-slots").onclick = async () => {
+      const vibeIds = [0, 1, 2]
+        .map((i) => document.getElementById(`vibe-slot-${i}`).value)
+        .filter(Boolean);
+      try {
+        const data = await api("/browse-slots", { method: "POST", needsAuth: true, body: { vibeIds } });
+        state.browse.vibeSlots = data.browseVibeSlots || [];
+        toast("Channels updated");
+        renderBrowse();
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  }
 }
 
 function slug(s) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 }
 
-async function loadBrowseChannel(channel) {
+async function loadBrowseChannel(entry) {
   if (!canRunDiscoverBrowse()) {
-    toast("Refresh is admin-only — you're viewing a preview");
+    toast("Refresh needs admin or a Friend account — you're viewing a preview");
     return;
   }
-  const container = document.querySelector(`#channel-${slug(channel)} .channel-body`);
+  const container = document.querySelector(`#channel-${slug(entry.key)} .channel-body`);
   container.innerHTML = `<div class="empty-state"><span class="spinner"></span> Loading...</div>`;
   try {
-    const data = await api("/browse", { method: "POST", needsAuth: true, body: { channel } });
+    const body = entry.kind === "vibe" ? { vibeId: entry.vibeId } : { channel: entry.channel };
+    const data = await api("/browse", { method: "POST", needsAuth: true, body });
     const tracks = data.tracks || [];
-    state.browse.channels[channel].tracks = tracks;
+    state.browse.channels[entry.key].tracks = tracks;
     if (tracks.length === 0) {
       container.innerHTML = `<div class="empty-state">No suggestions returned.</div>`;
       return;
@@ -791,13 +878,13 @@ async function loadBrowseChannel(channel) {
           <div class="track-title">${escapeHtml(t.artist || "")}${t.track ? " — " + escapeHtml(t.track) : " — browse catalog"}</div>
           <div class="track-meta">${escapeHtml(t.label || "")}${t.release_date ? " · " + escapeHtml(t.release_date) : ""}</div>
         </div>
-        <button class="add-btn" data-channel="${channel}" data-i="${i}">+</button>
+        <button class="add-btn" data-i="${i}">+</button>
       </div>`
       )
       .join("");
     container.querySelectorAll(".add-btn").forEach((btn) => {
       btn.onclick = () => {
-        const t = state.browse.channels[channel].tracks[+btn.dataset.i];
+        const t = state.browse.channels[entry.key].tracks[+btn.dataset.i];
         addToSavedList(t);
         btn.classList.add("added");
         btn.textContent = "✓";
