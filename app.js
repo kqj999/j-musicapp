@@ -28,6 +28,10 @@ const state = {
     vibesList: [], vibesLoaded: false,
     expanded: { lists: true, vibes: false, genres: false, imports: false },
     sort: { lists: { col: "name", dir: "asc" }, vibes: { col: "name", dir: "asc" } },
+    trackViewSort: { col: null, dir: "asc" },
+    editMode: false,
+    trackSearchQuery: "",
+    _lastItemKey: null,
   },
   mixes: { list: [], loading: false },
   profile: null,
@@ -1251,6 +1255,122 @@ function renderCrateMain() {
   renderCrateListView(el, section);
 }
 
+// ---------------------------------------------------------------------------
+// Shared track-view helpers (used by both List and Vibe detail views)
+// ---------------------------------------------------------------------------
+
+// Only reset per-item view state (edit mode, search, sort) when actually
+// switching to a different item — not on every re-render of the same one.
+function crateResetTrackViewIfNewItem(key) {
+  if (state.crate._lastItemKey !== key) {
+    state.crate.editMode = false;
+    state.crate.trackSearchQuery = "";
+    state.crate.trackViewSort = { col: null, dir: "asc" };
+    state.crate._lastItemKey = key;
+  }
+}
+
+function crateTrackSortIndicator(col) {
+  const s = state.crate.trackViewSort;
+  if (s.col !== col) return "";
+  return s.dir === "asc" ? " ▲" : " ▼";
+}
+
+// Filters by the search box and sorts by the active column, while carrying
+// each track's original array index (__i) through — needed so remove/reorder
+// operate on the real underlying array even when the display is filtered or
+// sorted differently from storage order.
+function crateFilterAndSortTracks(tracks) {
+  const withIndex = tracks.map((t, i) => ({ ...t, __i: i }));
+  const q = state.crate.trackSearchQuery.trim().toLowerCase();
+  let result = q
+    ? withIndex.filter((t) => `${t.artist || ""} ${t.track || ""}`.toLowerCase().includes(q))
+    : withIndex;
+  const sort = state.crate.trackViewSort;
+  if (sort.col) {
+    result = [...result].sort((a, b) => {
+      let av = a[sort.col], bv = b[sort.col];
+      if (sort.col === "bpm") { av = parseFloat(av) || 0; bv = parseFloat(bv) || 0; }
+      else { av = (av || "").toString().toLowerCase(); bv = (bv || "").toString().toLowerCase(); }
+      if (av < bv) return sort.dir === "asc" ? -1 : 1;
+      if (av > bv) return sort.dir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }
+  return result;
+}
+
+// Reorder only makes sense against the natural (unfiltered, unsorted) order —
+// dragging rows around a filtered/sorted view wouldn't map cleanly back to
+// storage order, so Edit mode's drag-to-reorder is disabled while either is active.
+function crateCanReorder() {
+  return state.crate.editMode && !state.crate.trackSearchQuery.trim() && !state.crate.trackViewSort.col;
+}
+
+// Builds the Rekordbox-style sortable table. `showRemove` controls the trailing
+// delete column (Edit mode only); `dragEnabled` controls the drag handle column.
+function crateTrackTableHtml(rows, { dragEnabled, showRemove }) {
+  if (rows.length === 0) {
+    return `<div class="empty-state">${state.crate.trackSearchQuery ? "No matches" : "No tracks yet"}</div>`;
+  }
+  return `
+    <table class="crate-track-table">
+      <thead>
+        <tr>
+          ${dragEnabled ? `<th></th>` : ""}
+          <th data-track-sort-col="track">Track Title${crateTrackSortIndicator("track")}</th>
+          <th data-track-sort-col="artist">Artist${crateTrackSortIndicator("artist")}</th>
+          <th data-track-sort-col="bpm">BPM${crateTrackSortIndicator("bpm")}</th>
+          <th data-track-sort-col="key">Key${crateTrackSortIndicator("key")}</th>
+          <th data-track-sort-col="time">Time${crateTrackSortIndicator("time")}</th>
+          <th data-track-sort-col="genre">Genre${crateTrackSortIndicator("genre")}</th>
+          <th data-track-sort-col="addedAt">Date Added${crateTrackSortIndicator("addedAt")}</th>
+          ${showRemove ? `<th></th>` : ""}
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((t) => `
+          <tr draggable="${dragEnabled}" data-track-orig-i="${t.__i}">
+            ${dragEnabled ? `<td class="drag-handle-cell">⠿</td>` : ""}
+            <td class="track-cell-title">${escapeHtml(t.track || "—")}</td>
+            <td class="track-cell-artist">${escapeHtml(t.artist || "—")}</td>
+            <td>${escapeHtml(t.bpm ? String(t.bpm) : "—")}</td>
+            <td>${escapeHtml(t.key || "—")}</td>
+            <td>${escapeHtml(t.time || "—")}</td>
+            <td>${escapeHtml(t.genre || "—")}</td>
+            <td>${t.addedAt ? new Date(t.addedAt).toLocaleDateString() : "—"}</td>
+            ${showRemove ? `<td><button class="icon-btn" data-track-remove-i="${t.__i}">✕</button></td>` : ""}
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function crateWireTrackSortHeaders(containerEl, onResort) {
+  containerEl.querySelectorAll("[data-track-sort-col]").forEach((th) => {
+    th.onclick = () => {
+      const col = th.dataset.trackSortCol;
+      const s = state.crate.trackViewSort;
+      if (s.col === col) s.dir = s.dir === "asc" ? "desc" : "asc";
+      else { s.col = col; s.dir = "asc"; }
+      onResort();
+    };
+  });
+}
+
+function crateTrackMetaRowHtml(item) {
+  const parts = [];
+  if (item.createdAt) parts.push(`Created ${new Date(item.createdAt).toLocaleDateString()}`);
+  if (item.updatedAt) parts.push(`Updated ${new Date(item.updatedAt).toLocaleDateString()}`);
+  parts.push(`${item.trackCount} track${item.trackCount === 1 ? "" : "s"}`);
+  return parts.join(" · ");
+}
+
+// ---------------------------------------------------------------------------
+// Vibe track-view
+// ---------------------------------------------------------------------------
+
 async function loadCrateVibeDetail(el) {
   el.innerHTML = `<div class="empty-state"><span class="spinner"></span> Loading...</div>`;
   try {
@@ -1262,42 +1382,63 @@ async function loadCrateVibeDetail(el) {
 }
 
 function renderCrateVibeDetail(el, vibe) {
+  crateResetTrackViewIfNewItem(`vibes:${vibe.id}`);
+
+  const dragEnabled = crateCanReorder();
+  const showRemove = state.crate.editMode;
+  const rows = crateFilterAndSortTracks(vibe.tracks);
+
   el.innerHTML = `
     <div class="channel-head">
-      <h4>✦ ${escapeHtml(vibe.name)}</h4>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span class="star ${vibe.isActiveInBrowse ? "filled" : "outline"}">★</span>
+        <h4 class="crate-heading">${escapeHtml(vibe.name)}</h4>
+      </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <button class="icon-btn" id="btn-back-to-vibes">← all vibes</button>
         <button class="icon-btn" id="btn-rename-vibe">rename</button>
         <button class="icon-btn" id="btn-delete-vibe">delete</button>
+        <button class="icon-btn" id="btn-edit-mode">${state.crate.editMode ? "done" : "edit"}</button>
       </div>
     </div>
+
+    <textarea class="input" id="track-description" rows="2" placeholder="Description — optional, what does this sound like?" style="margin-top:12px;">${escapeHtml(vibe.description || "")}</textarea>
+
+    <div class="track-meta-row">${crateTrackMetaRowHtml({ createdAt: vibe.createdAt, updatedAt: vibe.updatedAt, trackCount: vibe.tracks.length })}</div>
+
     <div class="seed-row" style="margin-top:14px;">
-      <input class="input" id="vibe-manual-artist" placeholder="Artist" style="flex:1;" />
-      <input class="input" id="vibe-manual-track" placeholder="Track" style="flex:1;" />
-      <button class="btn btn-sm" id="btn-vibe-add-manual">Add</button>
+      <input class="input" id="track-search" placeholder="Search tracks..." value="${escapeAttr(state.crate.trackSearchQuery)}" style="flex:1;" />
     </div>
-    <div id="vibe-tracks" style="margin-top:10px;"></div>
+
+    ${!state.crate.editMode ? `
+      <div class="seed-row" style="margin-top:10px;">
+        <input class="input" id="vibe-manual-artist" placeholder="Artist" style="flex:1;" />
+        <input class="input" id="vibe-manual-track" placeholder="Track" style="flex:1;" />
+        <button class="btn btn-sm" id="btn-vibe-add-manual">Add</button>
+      </div>
+    ` : ""}
+
+    <div id="vibe-tracks" style="margin-top:12px;"></div>
   `;
 
-  const tracksEl = document.getElementById("vibe-tracks");
-  if (vibe.tracks.length === 0) {
-    tracksEl.innerHTML = `<div class="empty-state">No tracks in this Vibe yet</div>`;
-  } else {
-    tracksEl.innerHTML = vibe.tracks
-      .map(
-        (t) => `
-      <div class="crate-track-row">
-        <span class="drag-handle"></span>
-        <div>
-          <div class="track-title">${escapeHtml(t.artist)}${t.track ? " — " + escapeHtml(t.track) : ""}</div>
-          <div class="track-meta">${escapeHtml(t.genre || "")}${t.bpm ? " · " + escapeHtml(String(t.bpm)) + " BPM" : ""}${t.key ? " · " + escapeHtml(t.key) : ""}</div>
-        </div>
-        <span></span>
-        <button class="icon-btn" data-remove-track="${escapeAttr(t.id)}">✕</button>
-      </div>`
-      )
-      .join("");
-  }
+  document.getElementById("vibe-tracks").innerHTML = crateTrackTableHtml(rows, { dragEnabled, showRemove });
+  crateWireTrackSortHeaders(el, () => renderCrateVibeDetail(el, vibe));
+
+  document.getElementById("track-search").oninput = (e) => {
+    state.crate.trackSearchQuery = e.target.value;
+    renderCrateVibeDetail(el, vibe);
+  };
+
+  document.getElementById("track-description").onchange = async (e) => {
+    try {
+      await api("/vibes/description", { method: "POST", needsAuth: true, body: { vibeId: vibe.id, description: e.target.value } });
+      vibe.description = e.target.value;
+      const idx = state.crate.vibesList.findIndex((v) => v.id === vibe.id);
+      if (idx !== -1) state.crate.vibesList[idx].description = e.target.value;
+    } catch (err) {
+      toast(err.message);
+    }
+  };
 
   document.getElementById("btn-back-to-vibes").onclick = () => {
     state.crate.activeItemId = null;
@@ -1333,37 +1474,82 @@ function renderCrateVibeDetail(el, vibe) {
     }
   };
 
-  document.getElementById("btn-vibe-add-manual").onclick = async () => {
-    const artist = document.getElementById("vibe-manual-artist").value.trim();
-    const track = document.getElementById("vibe-manual-track").value.trim();
-    if (!artist) return;
-    try {
-      await api("/vibes/add-track", { method: "POST", needsAuth: true, body: { vibeId: vibe.id, artist, track } });
-      const idx = state.crate.vibesList.findIndex((v) => v.id === vibe.id);
-      if (idx !== -1) state.crate.vibesList[idx].trackCount += 1;
-      loadCrateVibeDetail(el);
-    } catch (err) {
-      toast(err.message);
-    }
+  document.getElementById("btn-edit-mode").onclick = () => {
+    state.crate.editMode = !state.crate.editMode;
+    renderCrateVibeDetail(el, vibe);
   };
 
-  tracksEl.querySelectorAll("[data-remove-track]").forEach((btn) => {
-    btn.onclick = async () => {
+  const addManualBtn = document.getElementById("btn-vibe-add-manual");
+  if (addManualBtn) {
+    addManualBtn.onclick = async () => {
+      const artist = document.getElementById("vibe-manual-artist").value.trim();
+      const track = document.getElementById("vibe-manual-track").value.trim();
+      if (!artist) return;
       try {
-        await api("/vibes/remove-track", {
-          method: "POST",
-          needsAuth: true,
-          body: { vibeId: vibe.id, uploadId: btn.dataset.removeTrack },
-        });
+        await api("/vibes/add-track", { method: "POST", needsAuth: true, body: { vibeId: vibe.id, artist, track } });
         const idx = state.crate.vibesList.findIndex((v) => v.id === vibe.id);
-        if (idx !== -1) state.crate.vibesList[idx].trackCount -= 1;
+        if (idx !== -1) state.crate.vibesList[idx].trackCount += 1;
         loadCrateVibeDetail(el);
       } catch (err) {
         toast(err.message);
       }
     };
+  }
+
+  const tracksContainer = document.getElementById("vibe-tracks");
+
+  if (showRemove) {
+    tracksContainer.querySelectorAll("[data-track-remove-i]").forEach((btn) => {
+      btn.onclick = async () => {
+        const origIndex = +btn.dataset.trackRemoveI;
+        const uploadId = vibe.tracks[origIndex].id;
+        try {
+          await api("/vibes/remove-track", { method: "POST", needsAuth: true, body: { vibeId: vibe.id, uploadId } });
+          const idx = state.crate.vibesList.findIndex((v) => v.id === vibe.id);
+          if (idx !== -1) state.crate.vibesList[idx].trackCount -= 1;
+          loadCrateVibeDetail(el);
+        } catch (err) {
+          toast(err.message);
+        }
+      };
+    });
+  }
+
+  if (dragEnabled) {
+    setupVibeDragReorder(tracksContainer, vibe, el);
+  }
+}
+
+function setupVibeDragReorder(container, vibe, el) {
+  let dragIndex = null;
+  container.querySelectorAll("[data-track-orig-i]").forEach((row) => {
+    row.addEventListener("dragstart", () => {
+      dragIndex = +row.dataset.trackOrigI;
+      row.classList.add("dragging");
+    });
+    row.addEventListener("dragend", () => row.classList.remove("dragging"));
+    row.addEventListener("dragover", (e) => e.preventDefault());
+    row.addEventListener("drop", async () => {
+      const dropIndex = +row.dataset.trackOrigI;
+      if (dragIndex === null || dragIndex === dropIndex) return;
+      const newTracks = [...vibe.tracks];
+      const [moved] = newTracks.splice(dragIndex, 1);
+      newTracks.splice(dropIndex, 0, moved);
+      const newOrder = newTracks.map((t) => t.id);
+      try {
+        await api("/vibes/reorder", { method: "POST", needsAuth: true, body: { vibeId: vibe.id, trackIds: newOrder } });
+        vibe.tracks = newTracks;
+        renderCrateVibeDetail(el, vibe);
+      } catch (err) {
+        toast(err.message);
+      }
+    });
   });
 }
+
+// ---------------------------------------------------------------------------
+// List track-view
+// ---------------------------------------------------------------------------
 
 function renderCrateMainList(el, isAdmin) {
   const list = state.crate.lists[state.crate.activeItemId];
@@ -1373,32 +1559,62 @@ function renderCrateMainList(el, isAdmin) {
     return;
   }
 
+  crateResetTrackViewIfNewItem(`lists:${state.crate.activeItemId}`);
+
+  const dragEnabled = isAdmin && crateCanReorder();
+  const showRemove = isAdmin && state.crate.editMode;
+  const rows = crateFilterAndSortTracks(list.tracks);
+
   el.innerHTML = `
     <div class="channel-head">
-      <h4>${escapeHtml(list.name)}</h4>
+      <h4 class="crate-heading">${escapeHtml(list.name)}</h4>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="icon-btn" id="btn-play-list">▶ play list</button>
         ${isAdmin ? `<button class="icon-btn" id="btn-toggle-lock">${list.locked ? "🔒 locked" : "🔓 unlocked"}</button>` : ""}
         ${isAdmin ? `<button class="icon-btn" id="btn-rename-list">rename</button>` : ""}
         ${isAdmin ? `<button class="icon-btn" id="btn-delete-list">delete</button>` : ""}
+        ${isAdmin ? `<button class="icon-btn" id="btn-edit-mode">${state.crate.editMode ? "done" : "edit"}</button>` : ""}
         <button class="icon-btn" id="btn-export-list">export .txt</button>
       </div>
     </div>
-    ${isAdmin ? `
-      <div class="seed-row" style="margin-top:14px;">
+
+    <textarea class="input" id="track-description" rows="2" placeholder="Description — optional, what does this sound like?" style="margin-top:12px;" ${isAdmin ? "" : "disabled"}>${escapeHtml(list.description || "")}</textarea>
+
+    <div class="track-meta-row">${crateTrackMetaRowHtml({ createdAt: list.createdAt, updatedAt: list.updatedAt, trackCount: list.tracks.length })}</div>
+
+    <div class="seed-row" style="margin-top:14px;">
+      <input class="input" id="track-search" placeholder="Search tracks..." value="${escapeAttr(state.crate.trackSearchQuery)}" style="flex:1;" />
+    </div>
+
+    ${isAdmin && !state.crate.editMode ? `
+      <div class="seed-row" style="margin-top:10px;">
         <input class="input" id="manual-artist" placeholder="Artist" style="flex:1;" />
         <input class="input" id="manual-track" placeholder="Track" style="flex:1;" />
         <button class="btn btn-sm" id="btn-add-manual">Add</button>
       </div>
     ` : ""}
-    <div id="crate-tracks" style="margin-top:10px;"></div>
+
+    <div id="crate-tracks" style="margin-top:12px;"></div>
   `;
 
-  renderCrateTracks(list, isAdmin);
+  document.getElementById("crate-tracks").innerHTML = crateTrackTableHtml(rows, { dragEnabled, showRemove });
+  crateWireTrackSortHeaders(el, () => renderCrateMainList(el, isAdmin));
+
+  document.getElementById("track-search").oninput = (e) => {
+    state.crate.trackSearchQuery = e.target.value;
+    renderCrateMainList(el, isAdmin);
+  };
+
+  document.getElementById("track-description").onchange = (e) => {
+    if (!isAdmin) return;
+    list.description = e.target.value;
+    list.updatedAt = new Date().toISOString();
+    persistCrate();
+  };
 
   if (isAdmin) {
     document.getElementById("btn-toggle-lock").onclick = () => {
       list.locked = !list.locked;
+      list.updatedAt = new Date().toISOString();
       persistCrate();
       renderCrate();
     };
@@ -1406,6 +1622,7 @@ function renderCrateMainList(el, isAdmin) {
       const name = prompt("Rename list:", list.name);
       if (!name) return;
       list.name = name;
+      list.updatedAt = new Date().toISOString();
       persistCrate();
       renderCrate();
     };
@@ -1416,107 +1633,61 @@ function renderCrateMainList(el, isAdmin) {
       persistCrate();
       renderCrate();
     };
-    document.getElementById("btn-add-manual").onclick = () => {
-      const artist = document.getElementById("manual-artist").value.trim();
-      const track = document.getElementById("manual-track").value.trim();
-      if (!artist) return;
-      list.tracks.push({ artist, track, label: "", bpm: "", key: "", notes: "", audioUrl: null });
-      persistCrate();
-      renderCrate();
+    document.getElementById("btn-edit-mode").onclick = () => {
+      state.crate.editMode = !state.crate.editMode;
+      renderCrateMainList(el, isAdmin);
     };
+    const addManualBtn = document.getElementById("btn-add-manual");
+    if (addManualBtn) {
+      addManualBtn.onclick = () => {
+        const artist = document.getElementById("manual-artist").value.trim();
+        const track = document.getElementById("manual-track").value.trim();
+        if (!artist) return;
+        list.tracks.push({ artist, track, label: "", bpm: "", key: "", time: "", genre: "", notes: "", audioUrl: null });
+        list.updatedAt = new Date().toISOString();
+        persistCrate();
+        renderCrateMainList(el, isAdmin);
+      };
+    }
   }
 
   document.getElementById("btn-export-list").onclick = () => exportListAsTxt(list);
-  document.getElementById("btn-play-list").onclick = () => playQueue(list.tracks, 0, list.name);
-}
 
-function renderCrateTracks(list, isAdmin) {
-  const el = document.getElementById("crate-tracks");
-  if (list.tracks.length === 0) {
-    el.innerHTML = `<div class="empty-state">No tracks in this list yet</div>`;
-    return;
-  }
-  el.innerHTML = list.tracks
-    .map(
-      (t, i) => `
-    <div class="crate-track-row" draggable="${isAdmin}" data-i="${i}">
-      <span class="drag-handle">${isAdmin ? "⠿" : ""}</span>
-      <div>
-        <div class="track-title">${escapeHtml(t.artist)}${t.track ? " — " + escapeHtml(t.track) : ""}</div>
-        <div class="track-meta">${escapeHtml(t.label || "")} ${t.bpm ? "· " + t.bpm + " BPM" : ""} ${t.key ? "· " + escapeHtml(t.key) : ""} ${t.audioUrl ? "· 🎵 audio uploaded" : ""}</div>
-        ${isAdmin ? `<input class="crate-notes" data-i="${i}" placeholder="notes..." value="${escapeAttr(t.notes || "")}" />` : t.notes ? `<div class="track-meta">${escapeHtml(t.notes)}</div>` : ""}
-        ${isAdmin ? `
-          <label class="icon-btn" style="display:inline-block; margin-top:6px; cursor:pointer;">
-            ${t.audioUrl ? "replace audio" : "upload audio"}
-            <input type="file" accept="audio/mpeg,audio/wav,audio/mp3,.mp3,.wav" data-audio-upload="${i}" style="display:none;" />
-          </label>
-          <span class="upload-progress" data-upload-status="${i}"></span>
-        ` : ""}
-      </div>
-      <button class="icon-btn" data-play="${i}" ${t.audioUrl ? "" : "disabled"} title="${t.audioUrl ? "Play" : "No audio uploaded"}">▶</button>
-      ${isAdmin ? `<button class="icon-btn" data-remove="${i}">✕</button>` : "<span></span>"}
-    </div>`
-    )
-    .join("");
+  const tracksContainer = document.getElementById("crate-tracks");
 
-  if (isAdmin) {
-    el.querySelectorAll(".crate-notes").forEach((input) => {
-      input.onchange = () => {
-        list.tracks[+input.dataset.i].notes = input.value;
-        persistCrate();
-      };
-    });
-    el.querySelectorAll("[data-remove]").forEach((btn) => {
+  if (showRemove) {
+    tracksContainer.querySelectorAll("[data-track-remove-i]").forEach((btn) => {
       btn.onclick = () => {
-        list.tracks.splice(+btn.dataset.remove, 1);
+        list.tracks.splice(+btn.dataset.trackRemoveI, 1);
+        list.updatedAt = new Date().toISOString();
         persistCrate();
-        renderCrateMain();
+        renderCrateMainList(el, isAdmin);
       };
     });
-    el.querySelectorAll("[data-audio-upload]").forEach((input) => {
-      input.onchange = async () => {
-        const file = input.files[0];
-        if (!file) return;
-        const i = +input.dataset.audioUpload;
-        const statusEl = document.querySelector(`[data-upload-status="${i}"]`);
-        statusEl.textContent = "uploading...";
-        try {
-          const url = await uploadMedia(file, "audio");
-          list.tracks[i].audioUrl = url;
-          await persistCrate();
-          toast("Audio uploaded");
-          renderCrateMain();
-        } catch (err) {
-          statusEl.textContent = "";
-          toast("Upload failed: " + err.message);
-        }
-      };
-    });
-    setupDragReorder(el, list);
   }
 
-  el.querySelectorAll("[data-play]").forEach((btn) => {
-    if (btn.disabled) return;
-    btn.onclick = () => playQueue(list.tracks, +btn.dataset.play, list.name);
-  });
+  if (dragEnabled) {
+    setupListDragReorder(tracksContainer, list, el, isAdmin);
+  }
 }
 
-function setupDragReorder(container, list) {
+function setupListDragReorder(container, list, el, isAdmin) {
   let dragIndex = null;
-  container.querySelectorAll(".crate-track-row").forEach((row) => {
+  container.querySelectorAll("[data-track-orig-i]").forEach((row) => {
     row.addEventListener("dragstart", () => {
-      dragIndex = +row.dataset.i;
+      dragIndex = +row.dataset.trackOrigI;
       row.classList.add("dragging");
     });
     row.addEventListener("dragend", () => row.classList.remove("dragging"));
     row.addEventListener("dragover", (e) => e.preventDefault());
     row.addEventListener("drop", () => {
-      const dropIndex = +row.dataset.i;
+      const dropIndex = +row.dataset.trackOrigI;
       if (dragIndex === null || dragIndex === dropIndex) return;
       const [moved] = list.tracks.splice(dragIndex, 1);
       list.tracks.splice(dropIndex, 0, moved);
+      list.updatedAt = new Date().toISOString();
       persistCrate();
-      renderCrateMain();
+      renderCrateMainList(el, isAdmin);
     });
   });
 }
@@ -2056,6 +2227,16 @@ function renderAdmin() {
 // ============================================================================
 const panelImport = document.getElementById("panel-import");
 
+// Rekordbox XML stores duration as TotalTime in whole seconds — convert to
+// the same MM:SS format the TXT export already uses.
+function formatSecondsAsTime(totalSeconds) {
+  const s = parseInt(totalSeconds, 10);
+  if (!s || isNaN(s) || s < 0) return "";
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
 // Parses a Rekordbox XML export in the browser — never sent to the Worker as
 // raw XML, only as already-parsed track objects.
 function parseRekordboxXML(xmlText) {
@@ -2073,6 +2254,7 @@ function parseRekordboxXML(xmlText) {
       genre: el.getAttribute("Genre") || "",
       bpm: el.getAttribute("AverageBpm") || "",
       key: el.getAttribute("Tonality") || "",
+      time: formatSecondsAsTime(el.getAttribute("TotalTime")),
       label: el.getAttribute("Label") || "",
     });
   });
@@ -2114,6 +2296,7 @@ function parseRekordboxTXT(text) {
   const genreIdx = colIndex("Genre");
   const bpmIdx = colIndex("BPM");
   const keyIdx = colIndex("Key", "Tonality");
+  const timeIdx = colIndex("Time");
   const labelIdx = colIndex("Label");
 
   const tracks = [];
@@ -2128,6 +2311,7 @@ function parseRekordboxTXT(text) {
       genre: genreIdx !== -1 ? (cols[genreIdx] || "").trim() : "",
       bpm: bpmIdx !== -1 ? (cols[bpmIdx] || "").trim() : "",
       key: keyIdx !== -1 ? (cols[keyIdx] || "").trim() : "",
+      time: timeIdx !== -1 ? (cols[timeIdx] || "").trim() : "",
       label: labelIdx !== -1 ? (cols[labelIdx] || "").trim() : "",
     });
   }

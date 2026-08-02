@@ -744,6 +744,55 @@ button, input, textarea{
   font-weight:700;
 }
 .star.filled{ color:var(--green); }
+.star.outline{
+  color:transparent;
+  -webkit-text-stroke:1.5px var(--green);
+}
+.track-meta-row{
+  margin-top:8px;
+  color:var(--muted);
+  font-size:10.5px;
+}
+.crate-track-table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:12.5px;
+}
+.crate-track-table th{
+  text-align:left;
+  padding:10px 12px;
+  font-size:10.5px;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  color:var(--muted);
+  border-bottom:2px solid var(--border);
+  cursor:pointer;
+  user-select:none;
+  white-space:nowrap;
+}
+.crate-track-table th:hover{ color:var(--text); }
+.crate-track-table tbody tr{
+  border-bottom:1px solid var(--border);
+}
+.crate-track-table tbody tr.dragging{ opacity:0.4; }
+.crate-track-table td{
+  padding:11px 12px;
+  color:var(--text);
+}
+.track-cell-title{
+  font-size:14px;
+  font-weight:700;
+}
+.track-cell-artist{
+  font-size:13px;
+  font-weight:600;
+  color:#ccc;
+}
+.drag-handle-cell{
+  width:20px;
+  color:var(--muted);
+  cursor:grab;
+}
 .crate-list-item{
   display:flex;
   align-items:center;
