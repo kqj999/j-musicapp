@@ -1037,6 +1037,7 @@ function renderCrateSidebar() {
       </div>
     `).join("")}
     ${isAdmin && c.expanded.lists ? '<button class="btn btn-sm" id="btn-new-list" style="margin-top:10px; width:100%;">+ New List</button>' : ""}
+    ${state.username && c.expanded.vibes ? '<button class="btn btn-sm" id="btn-new-vibe" style="margin-top:10px; width:100%;">+ New Vibe</button>' : ""}
   `;
 
   el.querySelector('[data-section="jadeslist"]').onclick = () => {
@@ -1092,6 +1093,24 @@ function renderCrateSidebar() {
       };
     }
   }
+
+  const newVibeBtn = document.getElementById("btn-new-vibe");
+  if (newVibeBtn) {
+    newVibeBtn.onclick = async () => {
+      const name = prompt("Vibe name:", "Untitled Vibe");
+      if (!name) return;
+      try {
+        const data = await api("/vibes", { method: "POST", needsAuth: true, body: { name } });
+        state.crate.vibesList.push({ id: data.vibe.id, name: data.vibe.name, trackCount: 0 });
+        state.crate.activeSection = "vibes";
+        state.crate.activeVibeId = data.vibe.id;
+        renderCrateSidebar();
+        renderCrateMain();
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  }
 }
 
 function renderCrateMain() {
@@ -1112,7 +1131,7 @@ function renderCrateMain() {
     return;
   }
   if (section === "vibes") {
-    if (state.crate.activeVibeId) renderCrateMainVibeDetail(el);
+    if (state.crate.activeVibeId) loadCrateVibeDetail(el);
     else renderCrateVibesOverview(el);
     return;
   }
@@ -1175,24 +1194,118 @@ function renderCrateVibesOverview(el) {
   });
 }
 
-function renderCrateMainVibeDetail(el) {
-  const vibe = state.crate.vibesList.find((v) => v.id === state.crate.activeVibeId);
-  if (!vibe) {
-    renderCrateVibesOverview(el);
-    return;
+async function loadCrateVibeDetail(el) {
+  el.innerHTML = `<div class="empty-state"><span class="spinner"></span> Loading...</div>`;
+  try {
+    const detail = await api(`/vibes/${state.crate.activeVibeId}`, { needsAuth: true });
+    renderCrateVibeDetail(el, detail);
+  } catch (err) {
+    el.innerHTML = errorCardHtml(err.message);
   }
+}
+
+function renderCrateVibeDetail(el, vibe) {
   el.innerHTML = `
     <div class="channel-head">
       <h4>✦ ${escapeHtml(vibe.name)}</h4>
-      <button class="icon-btn" id="btn-back-to-vibes">← all vibes</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="icon-btn" id="btn-back-to-vibes">← all vibes</button>
+        <button class="icon-btn" id="btn-rename-vibe">rename</button>
+        <button class="icon-btn" id="btn-delete-vibe">delete</button>
+      </div>
     </div>
-    <div class="empty-state" style="padding:30px 0;">${vibe.trackCount} track${vibe.trackCount === 1 ? "" : "s"} — full track browsing coming in a future step</div>
+    <div class="seed-row" style="margin-top:14px;">
+      <input class="input" id="vibe-manual-artist" placeholder="Artist" style="flex:1;" />
+      <input class="input" id="vibe-manual-track" placeholder="Track" style="flex:1;" />
+      <button class="btn btn-sm" id="btn-vibe-add-manual">Add</button>
+    </div>
+    <div id="vibe-tracks" style="margin-top:10px;"></div>
   `;
+
+  const tracksEl = document.getElementById("vibe-tracks");
+  if (vibe.tracks.length === 0) {
+    tracksEl.innerHTML = `<div class="empty-state">No tracks in this Vibe yet</div>`;
+  } else {
+    tracksEl.innerHTML = vibe.tracks
+      .map(
+        (t) => `
+      <div class="crate-track-row">
+        <span class="drag-handle"></span>
+        <div>
+          <div class="track-title">${escapeHtml(t.artist)}${t.track ? " — " + escapeHtml(t.track) : ""}</div>
+          <div class="track-meta">${escapeHtml(t.genre || "")}${t.bpm ? " · " + escapeHtml(String(t.bpm)) + " BPM" : ""}${t.key ? " · " + escapeHtml(t.key) : ""}</div>
+        </div>
+        <span></span>
+        <button class="icon-btn" data-remove-track="${escapeAttr(t.id)}">✕</button>
+      </div>`
+      )
+      .join("");
+  }
+
   document.getElementById("btn-back-to-vibes").onclick = () => {
     state.crate.activeVibeId = null;
     renderCrateMain();
     renderCrateSidebar();
   };
+
+  document.getElementById("btn-rename-vibe").onclick = async () => {
+    const name = prompt("Rename vibe:", vibe.name);
+    if (!name) return;
+    try {
+      await api("/vibes/rename", { method: "POST", needsAuth: true, body: { vibeId: vibe.id, name } });
+      const idx = state.crate.vibesList.findIndex((v) => v.id === vibe.id);
+      if (idx !== -1) state.crate.vibesList[idx].name = name;
+      loadCrateVibeDetail(el);
+      renderCrateSidebar();
+    } catch (err) {
+      toast(err.message);
+    }
+  };
+
+  document.getElementById("btn-delete-vibe").onclick = async () => {
+    if (!confirm(`Delete "${vibe.name}"? This removes the Vibe (tracks stay in Imports).`)) return;
+    try {
+      await api("/vibes/delete", { method: "POST", needsAuth: true, body: { vibeId: vibe.id } });
+      state.crate.vibesList = state.crate.vibesList.filter((v) => v.id !== vibe.id);
+      state.crate.activeVibeId = null;
+      renderCrateMain();
+      renderCrateSidebar();
+      toast("Deleted");
+    } catch (err) {
+      toast(err.message);
+    }
+  };
+
+  document.getElementById("btn-vibe-add-manual").onclick = async () => {
+    const artist = document.getElementById("vibe-manual-artist").value.trim();
+    const track = document.getElementById("vibe-manual-track").value.trim();
+    if (!artist) return;
+    try {
+      await api("/vibes/add-track", { method: "POST", needsAuth: true, body: { vibeId: vibe.id, artist, track } });
+      const idx = state.crate.vibesList.findIndex((v) => v.id === vibe.id);
+      if (idx !== -1) state.crate.vibesList[idx].trackCount += 1;
+      loadCrateVibeDetail(el);
+    } catch (err) {
+      toast(err.message);
+    }
+  };
+
+  tracksEl.querySelectorAll("[data-remove-track]").forEach((btn) => {
+    btn.onclick = async () => {
+      try {
+        await api("/vibes/remove-track", {
+          method: "POST",
+          needsAuth: true,
+          body: { vibeId: vibe.id, uploadId: btn.dataset.removeTrack },
+        });
+        const idx = state.crate.vibesList.findIndex((v) => v.id === vibe.id);
+        if (idx !== -1) state.crate.vibesList[idx].trackCount -= 1;
+        loadCrateVibeDetail(el);
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  });
 }
 
 function renderCrateMainList(el, isAdmin) {
