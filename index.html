@@ -644,6 +644,102 @@ button, input, textarea{
   color:var(--muted);
   font-style:italic;
 }
+.crate-sidebar-shell{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.jades-list-pinned{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:14px 16px;
+  font-size:13px;
+  font-weight:700;
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+  color:var(--green);
+  background:var(--panel);
+  border:1.5px solid var(--green);
+  cursor:pointer;
+}
+.jades-list-pinned.active{
+  box-shadow:0 0 10px rgba(179,255,0,0.3);
+}
+.section-box{
+  background:var(--panel);
+  border:2px solid var(--border);
+  transition:border-color 0.15s ease;
+}
+.section-box.active{
+  border-color:var(--green);
+  box-shadow:0 0 10px rgba(179,255,0,0.2);
+}
+.section-box-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:14px 16px;
+  cursor:pointer;
+}
+.crate-box-title{
+  font-family:var(--font-display);
+  font-size:18px;
+  letter-spacing:0.02em;
+  color:var(--green);
+  text-transform:uppercase;
+  cursor:pointer;
+}
+.section-box-preview{
+  padding:0 16px 14px;
+  border-top:1px solid var(--border);
+}
+.section-box-preview-item{
+  padding:8px 4px;
+  font-size:11.5px;
+  color:var(--text);
+  cursor:pointer;
+  border-top:1px solid var(--border);
+}
+.section-box-preview-item:first-child{ border-top:none; }
+.section-box-preview-item:hover{ color:var(--green); }
+.crate-heading{
+  font-family:var(--font-display);
+  font-size:26px;
+  letter-spacing:0.02em;
+  color:var(--green);
+  text-transform:uppercase;
+}
+.crate-list-table{
+  width:100%;
+  border-collapse:collapse;
+  margin-top:14px;
+  font-size:12.5px;
+}
+.crate-list-table th{
+  text-align:left;
+  padding:10px 12px;
+  font-size:10.5px;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  color:var(--muted);
+  border-bottom:2px solid var(--border);
+  cursor:pointer;
+  user-select:none;
+  white-space:nowrap;
+}
+.crate-list-table th:hover{ color:var(--text); }
+.crate-list-row{
+  cursor:pointer;
+  border-bottom:1px solid var(--border);
+}
+.crate-list-row:hover{ background:#141414; }
+.crate-list-row td{ padding:12px; }
+.crate-list-row.browse-active td:first-child{
+  color:var(--green);
+  font-weight:700;
+}
+.star.filled{ color:var(--green); }
 .crate-list-item{
   display:flex;
   align-items:center;
