@@ -31,6 +31,8 @@ const state = {
     genresList: [], uncategorizedCount: 0, genresLoaded: false,
     genresListEditMode: false, selectedGenreNames: new Set(),
     selectedTrackIds: new Set(), pendingNewGenreName: null,
+    batchesList: [], batchesLoaded: false,
+    batchesListEditMode: false, selectedBatchIds: new Set(),
     trackViewSort: { col: null, dir: "asc" },
     editMode: false,
     trackSearchQuery: "",
@@ -376,6 +378,7 @@ function loadInitialData() {
   }
   loadCrateVibes();
   loadCrateGenres();
+  loadCrateBatches();
   loadMixes();
 }
 
@@ -916,6 +919,12 @@ async function loadBrowseChannel(entry) {
 // ============================================================================
 const panelCrate = document.getElementById("panel-crate");
 
+// Lists are addressed by real id now (matches Vibes/Genres), not array
+// position — this is the one lookup point everything else should use.
+function crateFindList(id) {
+  return state.crate.lists.find((l) => l.id === id);
+}
+
 async function loadCrate() {
   state.crate.loading = true;
   try {
@@ -980,6 +989,24 @@ async function loadCrateGenres() {
   if (state.activeTab === "crate") renderCrate();
 }
 
+// Source of Truth — one row per import batch (Discovered Tracks from
+// Discover/Browse "+", plus one per file you've run through Import).
+async function loadCrateBatches() {
+  if (!state.username) {
+    state.crate.batchesList = [];
+    state.crate.batchesLoaded = true;
+    return;
+  }
+  try {
+    const data = await api("/imports", { needsAuth: true });
+    state.crate.batchesList = data.batches || [];
+  } catch (err) {
+    state.crate.batchesList = [];
+  }
+  state.crate.batchesLoaded = true;
+  if (state.activeTab === "crate") renderCrate();
+}
+
 async function persistCrate() {
   if (state.authLevel !== "admin") return;
   try {
@@ -989,21 +1016,22 @@ async function persistCrate() {
   }
 }
 
-function saveTracksToCrate(tracks) {
-  if (state.authLevel !== "admin") {
-    toast("Admin access required to save to Crate");
+// The "+" save button on Discover/Browse. Creates real Uploads (not
+// disconnected copies) filed under the reserved Discovered Tracks batch —
+// any named user can use this now, not just Admin, since it's scoped to
+// their own Uploads same as Vibes/Genres/Import already are.
+async function saveTracksToCrate(tracks) {
+  if (!state.username) {
+    toast("Log in with your name to save tracks");
     return;
   }
-  if (state.crate.lists.length === 0) {
-    state.crate.lists.push({ name: "New List", locked: false, tracks: [] });
+  try {
+    await api("/imports/save-discovered", { method: "POST", needsAuth: true, body: { tracks } });
+    toast(`Saved ${tracks.length} track(s) to Discovered Tracks`);
+    loadCrateBatches();
+  } catch (err) {
+    toast(err.message);
   }
-  const target = state.crate.lists[state.crate.activeItemId] || state.crate.lists[0];
-  tracks.forEach((t) =>
-    target.tracks.push({ artist: t.artist || "", track: t.track || "", label: t.label || "", bpm: t.bpm || "", key: t.key || "", notes: "", audioUrl: null })
-  );
-  persistCrate();
-  toast(`Added ${tracks.length} track(s) to "${target.name}"`);
-  if (state.activeTab === "crate") renderCrate();
 }
 
 function renderCrate() {
@@ -1027,7 +1055,7 @@ const CRATE_SECTIONS = [
   { key: "lists", label: "My Lists" },
   { key: "vibes", label: "Vibe Curation" },
   { key: "genres", label: "Genres" },
-  { key: "imports", label: "Imported" },
+  { key: "imports", label: "Source of Truth" },
 ];
 
 // Returns up to 5 preview items { id, label } for a section box, plus the
@@ -1035,7 +1063,7 @@ const CRATE_SECTIONS = [
 function crateSectionPreviewItems(key) {
   const c = state.crate;
   if (key === "lists") {
-    return c.lists.slice(0, 5).map((l, i) => ({ id: i, label: l.name }));
+    return c.lists.slice(0, 5).map((l) => ({ id: l.id, label: l.name }));
   }
   if (key === "vibes") {
     return c.vibesList.slice(0, 5).map((v) => ({ id: v.id, label: v.name }));
@@ -1043,6 +1071,10 @@ function crateSectionPreviewItems(key) {
   if (key === "genres") {
     const items = c.uncategorizedCount > 0 ? [{ id: "Uncategorized", label: "Uncategorized" }] : [];
     return items.concat(c.genresList.slice(0, Math.max(0, 5 - items.length)).map((g) => ({ id: g.name, label: g.name })));
+  }
+  if (key === "imports") {
+    const sorted = [...c.batchesList].sort((a, b) => (a.id === "discovered" ? -1 : b.id === "discovered" ? 1 : 0));
+    return sorted.slice(0, 5).map((b) => ({ id: b.id, label: b.filename }));
   }
   return [];
 }
@@ -1070,7 +1102,7 @@ function renderCrateSidebar() {
         ${expanded ? `
           <div class="section-box-preview">
             ${preview.length === 0
-              ? `<div class="crate-tree-empty">${sec.key === "lists" || sec.key === "vibes" || sec.key === "genres" ? "Nothing here yet" : "Coming in a future step"}</div>`
+              ? `<div class="crate-tree-empty">${sec.key === "lists" || sec.key === "vibes" || sec.key === "genres" || sec.key === "imports" ? "Nothing here yet" : "Coming in a future step"}</div>`
               : preview.map((item) => {
                   const isOpen = isActive && String(item.id) === String(c.activeItemId);
                   return `
@@ -1122,7 +1154,7 @@ function renderCrateSidebar() {
       const key = itemEl.dataset.openItem;
       const rawId = itemEl.dataset.itemId;
       state.crate.activeSection = key;
-      state.crate.activeItemId = key === "lists" ? +rawId : rawId;
+      state.crate.activeItemId = rawId;
       renderCrateSidebar();
       renderCrateMain();
     };
@@ -1158,10 +1190,7 @@ function renderCrateListView(el, section) {
   const sectionLabel = CRATE_SECTIONS.find((s) => s.key === section).label;
 
   if (section === "imports") {
-    el.innerHTML = `
-      <div class="channel-head"><h4 class="crate-heading">${escapeHtml(sectionLabel)}</h4></div>
-      <div class="empty-state" style="padding:40px 0;">Coming in a future step</div>
-    `;
+    renderCrateBatchesListView(el);
     return;
   }
 
@@ -1172,7 +1201,7 @@ function renderCrateListView(el, section) {
 
   const isLists = section === "lists";
   const rawRows = isLists
-    ? c.lists.map((l, i) => ({ id: i, name: l.name, trackCount: l.tracks.length, updatedAt: l.updatedAt || null }))
+    ? c.lists.map((l) => ({ id: l.id, name: l.name, trackCount: l.tracks.length, updatedAt: l.updatedAt || null }))
     : c.vibesList.map((v) => ({ id: v.id, name: v.name, trackCount: v.trackCount, updatedAt: v.updatedAt || null, isActiveInBrowse: v.isActiveInBrowse }));
 
   const rows = crateSortRows(section, rawRows);
@@ -1219,7 +1248,7 @@ function renderCrateListView(el, section) {
   el.querySelectorAll("[data-open-row]").forEach((row) => {
     row.onclick = () => {
       const rawId = row.dataset.openRow;
-      state.crate.activeItemId = isLists ? +rawId : rawId;
+      state.crate.activeItemId = rawId;
       renderCrateMain();
       renderCrateSidebar();
     };
@@ -1370,13 +1399,138 @@ function crateCreateNewGenre() {
   toast(`Select tracks below, then move them to "${name.trim()}"`);
 }
 
+// Source of Truth — Discovered Tracks (the reserved batch from Discover/
+// Browse's "+") always pinned first, then every file you've run through
+// Import, grouped under "Uploaded Lists" and sorted most-recent-first.
+function crateBatchModeLabel(mode) {
+  if (mode === "update-collection") return "Update Collection";
+  if (mode === "add-to-vibe") return "Add to Vibe";
+  if (mode === "create-vibe") return "Create Vibe";
+  if (mode === "discover") return "Discovered";
+  return mode || "—";
+}
+
+function crateBatchRowHtml(b, editMode, isDiscovered) {
+  return `
+    <tr class="crate-list-row" data-open-batch="${escapeAttr(b.id)}">
+      ${editMode ? `<td><input type="checkbox" class="batch-select-checkbox" data-batch-id="${escapeAttr(b.id)}" ${state.crate.selectedBatchIds.has(b.id) ? "checked" : ""} /></td>` : ""}
+      <td>${isDiscovered ? '<span class="star filled">★</span> ' : ""}${escapeHtml(b.filename)}</td>
+      <td>${b.createdAt ? new Date(b.createdAt).toLocaleDateString() : "—"}</td>
+      <td>${b.trackCount}</td>
+      <td>${escapeHtml(crateBatchModeLabel(b.mode))}</td>
+    </tr>
+  `;
+}
+
+function renderCrateBatchesListView(el) {
+  const batches = state.crate.batchesList;
+  const editMode = state.crate.batchesListEditMode;
+  const discovered = batches.find((b) => b.id === "discovered");
+  const fileBatches = batches
+    .filter((b) => b.id !== "discovered")
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  el.innerHTML = `
+    <div class="channel-head">
+      <h4 class="crate-heading">Source of Truth</h4>
+      ${batches.length > 0 ? `<button class="icon-btn" id="btn-batches-edit-mode">${editMode ? "done" : "edit"}</button>` : ""}
+    </div>
+    ${editMode ? `
+      <div class="seed-row" style="margin-top:10px; align-items:center;">
+        <button class="btn btn-sm" id="btn-delete-selected-batches">Delete Selected</button>
+        <span id="batches-selected-count" style="color:var(--muted); font-size:10.5px;"></span>
+      </div>
+    ` : ""}
+    ${batches.length === 0 ? `<div class="empty-state" style="padding:40px 0;">Nothing here yet</div>` : `
+      <table class="crate-list-table" style="margin-top:14px;">
+        <thead>
+          <tr>
+            ${editMode ? `<th><input type="checkbox" id="batches-select-all" /></th>` : ""}
+            <th>Title</th>
+            <th>Date Created</th>
+            <th># of Tracks</th>
+            <th>Import Mode</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${discovered ? crateBatchRowHtml(discovered, editMode, true) : ""}
+          ${fileBatches.length > 0 ? `<tr><td colspan="${editMode ? 5 : 4}" style="padding:14px 12px 6px; color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em;">Uploaded Lists</td></tr>` : ""}
+          ${fileBatches.map((b) => crateBatchRowHtml(b, editMode, false)).join("")}
+        </tbody>
+      </table>
+    `}
+  `;
+
+  el.querySelectorAll("[data-open-batch]").forEach((row) => {
+    row.onclick = (e) => {
+      if (e.target.type === "checkbox") return;
+      state.crate.activeItemId = row.dataset.openBatch;
+      renderCrateMain();
+      renderCrateSidebar();
+    };
+  });
+
+  const editBtn = document.getElementById("btn-batches-edit-mode");
+  if (editBtn) {
+    editBtn.onclick = () => {
+      state.crate.batchesListEditMode = !state.crate.batchesListEditMode;
+      state.crate.selectedBatchIds = new Set();
+      renderCrateBatchesListView(el);
+    };
+  }
+
+  if (editMode) {
+    const countEl = document.getElementById("batches-selected-count");
+    if (countEl) countEl.textContent = `${state.crate.selectedBatchIds.size} selected`;
+
+    el.querySelectorAll(".batch-select-checkbox").forEach((cb) => {
+      cb.onchange = () => {
+        if (cb.checked) state.crate.selectedBatchIds.add(cb.dataset.batchId);
+        else state.crate.selectedBatchIds.delete(cb.dataset.batchId);
+        const c = document.getElementById("batches-selected-count");
+        if (c) c.textContent = `${state.crate.selectedBatchIds.size} selected`;
+      };
+    });
+
+    const selectAllCb = document.getElementById("batches-select-all");
+    if (selectAllCb) {
+      selectAllCb.onchange = () => {
+        const allIds = batches.map((b) => b.id);
+        if (selectAllCb.checked) allIds.forEach((id) => state.crate.selectedBatchIds.add(id));
+        else state.crate.selectedBatchIds.clear();
+        renderCrateBatchesListView(el);
+      };
+    }
+
+    document.getElementById("btn-delete-selected-batches").onclick = async () => {
+      const ids = [...state.crate.selectedBatchIds];
+      if (ids.length === 0) {
+        toast("Select at least one row");
+        return;
+      }
+      if (!confirm(`Delete ${ids.length} ${ids.length === 1 ? "entry" : "entries"}? This deletes every track inside from your database completely.`)) return;
+      try {
+        await api("/imports/delete", { method: "POST", needsAuth: true, body: { batchIds: ids } });
+        state.crate.selectedBatchIds = new Set();
+        toast("Deleted");
+        await loadCrateBatches();
+        renderCrateMain();
+        renderCrateSidebar();
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  }
+}
+
 function crateCreateNewList() {
   const name = prompt("List name:", "Untitled List");
   if (!name) return;
   const now = new Date().toISOString();
-  state.crate.lists.push({ name, locked: false, tracks: [], createdAt: now, updatedAt: now });
+  const newList = { id: crypto.randomUUID(), name, locked: false, trackIds: [], tracks: [], createdAt: now, updatedAt: now };
+  state.crate.lists.push(newList);
   state.crate.activeSection = "lists";
-  state.crate.activeItemId = state.crate.lists.length - 1;
+  state.crate.activeItemId = newList.id;
   persistCrate();
   renderCrateSidebar();
   renderCrateMain();
@@ -1425,7 +1579,12 @@ function renderCrateMain() {
     return;
   }
 
-  if (section === "lists" && state.crate.lists[state.crate.activeItemId]) {
+  if (section === "imports") {
+    loadCrateBatchDetail(el);
+    return;
+  }
+
+  if (section === "lists" && crateFindList(state.crate.activeItemId)) {
     renderCrateMainList(el, isAdmin);
     return;
   }
@@ -1498,7 +1657,7 @@ function crateTrackTableHtml(rows, { dragEnabled, showRemove, checkboxEnabled, s
       <thead>
         <tr>
           ${dragEnabled ? `<th></th>` : ""}
-          ${checkboxEnabled ? `<th><input type="checkbox" id="track-select-all" ${allSelected ? "checked" : ""} /></th>` : ""}
+          ${checkboxEnabled ? `<th><input type="checkbox" id="track-select-all" ${allSelected ? "checked" : ""} /></th><th></th>` : ""}
           <th data-track-sort-col="track">Track Title${crateTrackSortIndicator("track")}</th>
           <th data-track-sort-col="artist">Artist${crateTrackSortIndicator("artist")}</th>
           <th data-track-sort-col="bpm">BPM${crateTrackSortIndicator("bpm")}</th>
@@ -1513,7 +1672,7 @@ function crateTrackTableHtml(rows, { dragEnabled, showRemove, checkboxEnabled, s
         ${rows.map((t) => `
           <tr draggable="${dragEnabled}" data-track-orig-i="${t.__i}">
             ${dragEnabled ? `<td class="drag-handle-cell">⠿</td>` : ""}
-            ${checkboxEnabled ? `<td><input type="checkbox" class="track-select-checkbox" data-track-id="${escapeAttr(t.id)}" ${selectedIds.has(t.id) ? "checked" : ""} /></td>` : ""}
+            ${checkboxEnabled ? `<td><input type="checkbox" class="track-select-checkbox" data-track-id="${escapeAttr(t.id)}" ${selectedIds.has(t.id) ? "checked" : ""} /></td><td><button class="icon-btn track-edit-pencil" data-track-edit-id="${escapeAttr(t.id)}" title="Edit track">✎</button></td>` : ""}
             <td class="track-cell-title">${escapeHtml(t.track || "—")}</td>
             <td class="track-cell-artist">${escapeHtml(t.artist || "—")}</td>
             <td>${escapeHtml(t.bpm ? String(t.bpm) : "—")}</td>
@@ -1539,6 +1698,109 @@ function crateWireTrackSortHeaders(containerEl, onResort) {
       onResort();
     };
   });
+}
+
+// Wires the pencil-edit buttons rendered alongside checkboxes in Edit mode.
+// Shared across every track-view (Lists, Vibes, Genres, Source of Truth) —
+// they're all just different lenses onto the same Upload records, so
+// editing works identically no matter where you open it from.
+function crateWireTrackEditPencils(containerEl, rows, onSaved) {
+  containerEl.querySelectorAll(".track-edit-pencil").forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const track = rows.find((t) => t.id === btn.dataset.trackEditId);
+      if (track) crateOpenTrackEditPopup(track, onSaved);
+    };
+  });
+}
+
+function crateCloseTrackEditPopup() {
+  const overlay = document.getElementById("track-edit-overlay");
+  if (overlay) overlay.remove();
+}
+
+// The pencil-edit popup: editable fields for one track's own data, plus an
+// "Appears on" section (Lists + Vibes referencing it). Saving edits the
+// Upload directly, so the change is visible everywhere that track is
+// referenced the moment you close this. onSaved is called after a
+// successful save so the calling track-view can refresh itself.
+function crateOpenTrackEditPopup(track, onSaved) {
+  crateCloseTrackEditPopup();
+
+  const overlay = document.createElement("div");
+  overlay.className = "track-edit-overlay";
+  overlay.id = "track-edit-overlay";
+  overlay.onclick = (e) => {
+    if (e.target === overlay) crateCloseTrackEditPopup();
+  };
+  document.body.appendChild(overlay);
+
+  overlay.innerHTML = `
+    <div class="track-edit-modal">
+      <div class="channel-head">
+        <h4 class="crate-heading" style="font-size:20px;">Edit Track</h4>
+        <button class="icon-btn" id="btn-close-track-edit">✕</button>
+      </div>
+      <div class="track-edit-fields">
+        <label>Title<input class="input" id="edit-track-title" value="${escapeAttr(track.track || "")}" /></label>
+        <label>Artist<input class="input" id="edit-track-artist" value="${escapeAttr(track.artist || "")}" /></label>
+        <label>Album<input class="input" id="edit-track-album" value="${escapeAttr(track.album || "")}" /></label>
+        <label>BPM<input class="input" id="edit-track-bpm" value="${escapeAttr(track.bpm || "")}" /></label>
+        <label>Key<input class="input" id="edit-track-key" value="${escapeAttr(track.key || "")}" /></label>
+        <label>Time<input class="input" id="edit-track-time" value="${escapeAttr(track.time || "")}" /></label>
+        <label>Genre<input class="input" id="edit-track-genre" value="${escapeAttr(track.genre || "")}" /></label>
+        <label>Notes<textarea class="input" id="edit-track-notes" rows="2">${escapeHtml(track.notes || "")}</textarea></label>
+      </div>
+      <button class="btn btn-sm btn-primary" id="btn-save-track-edit" style="margin-top:14px;">Save</button>
+      <div class="track-edit-appears-on" id="track-appears-on"><span class="spinner"></span> Loading Appears On...</div>
+    </div>
+  `;
+
+  document.getElementById("btn-close-track-edit").onclick = crateCloseTrackEditPopup;
+
+  document.getElementById("btn-save-track-edit").onclick = async () => {
+    const fields = {
+      track: document.getElementById("edit-track-title").value.trim(),
+      artist: document.getElementById("edit-track-artist").value.trim(),
+      album: document.getElementById("edit-track-album").value.trim(),
+      bpm: document.getElementById("edit-track-bpm").value.trim(),
+      key: document.getElementById("edit-track-key").value.trim(),
+      time: document.getElementById("edit-track-time").value.trim(),
+      genre: document.getElementById("edit-track-genre").value.trim(),
+      notes: document.getElementById("edit-track-notes").value.trim(),
+    };
+    try {
+      await api("/imports/edit-track", { method: "POST", needsAuth: true, body: { uploadId: track.id, ...fields } });
+      toast("Saved");
+      crateCloseTrackEditPopup();
+      if (onSaved) onSaved();
+    } catch (err) {
+      toast(err.message);
+    }
+  };
+
+  api(`/imports/appears-on/${encodeURIComponent(track.id)}`, { needsAuth: true })
+    .then((ao) => {
+      const aoEl = document.getElementById("track-appears-on");
+      if (!aoEl) return;
+      const listsHtml = ao.lists.length > 0
+        ? ao.lists.map((l) => escapeHtml(l.name)).join("<br>")
+        : "<em>none</em>";
+      const vibesHtml = ao.vibes.length > 0
+        ? ao.vibes.map((v) => escapeHtml(v.name)).join("<br>")
+        : "<em>none</em>";
+      aoEl.innerHTML = `
+        <div class="track-meta-row" style="line-height:1.8; font-size:11px;">
+          <strong>My Lists (${ao.lists.length})</strong><br>${listsHtml}
+          <br><br>
+          <strong>Vibe Curation (${ao.vibes.length})</strong><br>${vibesHtml}
+        </div>
+      `;
+    })
+    .catch(() => {
+      const aoEl = document.getElementById("track-appears-on");
+      if (aoEl) aoEl.textContent = "Couldn't load Appears On.";
+    });
 }
 
 function crateTrackMetaRowHtml(item) {
@@ -1567,7 +1829,7 @@ function renderCrateVibeDetail(el, vibe) {
   crateResetTrackViewIfNewItem(`vibes:${vibe.id}`);
 
   const dragEnabled = crateCanReorder();
-  const showRemove = state.crate.editMode;
+  const checkboxEnabled = state.crate.editMode;
   const rows = crateFilterAndSortTracks(vibe.tracks);
 
   el.innerHTML = `
@@ -1592,19 +1854,20 @@ function renderCrateVibeDetail(el, vibe) {
       <input class="input" id="track-search" placeholder="Search tracks..." value="${escapeAttr(state.crate.trackSearchQuery)}" style="flex:1;" />
     </div>
 
-    ${!state.crate.editMode ? `
-      <div class="seed-row" style="margin-top:10px;">
-        <input class="input" id="vibe-manual-artist" placeholder="Artist" style="flex:1;" />
-        <input class="input" id="vibe-manual-track" placeholder="Track" style="flex:1;" />
-        <button class="btn btn-sm" id="btn-vibe-add-manual">Add</button>
+    ${checkboxEnabled ? `
+      <div class="seed-row" style="margin-top:10px; align-items:center; flex-wrap:wrap;">
+        <button class="btn btn-sm" id="btn-delete-selected-tracks">Delete Selected</button>
+        ${crateBulkAddSelectHtml(null, vibe.id)}
       </div>
+      <div style="margin-top:6px; color:var(--muted); font-size:10.5px;" id="tracks-selected-count"></div>
     ` : ""}
 
     <div id="vibe-tracks" style="margin-top:12px;"></div>
   `;
 
-  document.getElementById("vibe-tracks").innerHTML = crateTrackTableHtml(rows, { dragEnabled, showRemove });
+  document.getElementById("vibe-tracks").innerHTML = crateTrackTableHtml(rows, { dragEnabled, showRemove: false, checkboxEnabled, selectedIds: state.crate.selectedTrackIds });
   crateWireTrackSortHeaders(el, () => renderCrateVibeDetail(el, vibe));
+  crateWireTrackEditPencils(document.getElementById("vibe-tracks"), rows, () => loadCrateVibeDetail(el));
 
   document.getElementById("track-search").oninput = (e) => {
     state.crate.trackSearchQuery = e.target.value;
@@ -1643,7 +1906,7 @@ function renderCrateVibeDetail(el, vibe) {
   };
 
   document.getElementById("btn-delete-vibe").onclick = async () => {
-    if (!confirm(`Delete "${vibe.name}"? This removes the Vibe (tracks stay in Imports).`)) return;
+    if (!confirm(`Delete "${vibe.name}"? This removes the Vibe (tracks stay in Imported).`)) return;
     try {
       await api("/vibes/delete", { method: "POST", needsAuth: true, body: { vibeId: vibe.id } });
       state.crate.vibesList = state.crate.vibesList.filter((v) => v.id !== vibe.id);
@@ -1658,43 +1921,57 @@ function renderCrateVibeDetail(el, vibe) {
 
   document.getElementById("btn-edit-mode").onclick = () => {
     state.crate.editMode = !state.crate.editMode;
+    state.crate.selectedTrackIds = new Set();
     renderCrateVibeDetail(el, vibe);
   };
 
-  const addManualBtn = document.getElementById("btn-vibe-add-manual");
-  if (addManualBtn) {
-    addManualBtn.onclick = async () => {
-      const artist = document.getElementById("vibe-manual-artist").value.trim();
-      const track = document.getElementById("vibe-manual-track").value.trim();
-      if (!artist) return;
+  const tracksContainer = document.getElementById("vibe-tracks");
+
+  if (checkboxEnabled) {
+    crateUpdateTracksSelectedCount();
+
+    tracksContainer.querySelectorAll(".track-select-checkbox").forEach((cb) => {
+      cb.onchange = () => {
+        if (cb.checked) state.crate.selectedTrackIds.add(cb.dataset.trackId);
+        else state.crate.selectedTrackIds.delete(cb.dataset.trackId);
+        crateUpdateTracksSelectedCount();
+      };
+    });
+
+    const selectAllCb = document.getElementById("track-select-all");
+    if (selectAllCb) {
+      selectAllCb.onchange = () => {
+        if (selectAllCb.checked) rows.forEach((t) => state.crate.selectedTrackIds.add(t.id));
+        else rows.forEach((t) => state.crate.selectedTrackIds.delete(t.id));
+        renderCrateVibeDetail(el, vibe);
+      };
+    }
+
+    document.getElementById("btn-delete-selected-tracks").onclick = async () => {
+      const ids = [...state.crate.selectedTrackIds];
+      if (ids.length === 0) {
+        toast("Select at least one track");
+        return;
+      }
       try {
-        await api("/vibes/add-track", { method: "POST", needsAuth: true, body: { vibeId: vibe.id, artist, track } });
+        for (const uploadId of ids) {
+          await api("/vibes/remove-track", { method: "POST", needsAuth: true, body: { vibeId: vibe.id, uploadId } });
+        }
         const idx = state.crate.vibesList.findIndex((v) => v.id === vibe.id);
-        if (idx !== -1) state.crate.vibesList[idx].trackCount += 1;
+        if (idx !== -1) state.crate.vibesList[idx].trackCount -= ids.length;
+        state.crate.selectedTrackIds = new Set();
         loadCrateVibeDetail(el);
       } catch (err) {
         toast(err.message);
       }
     };
-  }
 
-  const tracksContainer = document.getElementById("vibe-tracks");
-
-  if (showRemove) {
-    tracksContainer.querySelectorAll("[data-track-remove-i]").forEach((btn) => {
-      btn.onclick = async () => {
-        const origIndex = +btn.dataset.trackRemoveI;
-        const uploadId = vibe.tracks[origIndex].id;
-        try {
-          await api("/vibes/remove-track", { method: "POST", needsAuth: true, body: { vibeId: vibe.id, uploadId } });
-          const idx = state.crate.vibesList.findIndex((v) => v.id === vibe.id);
-          if (idx !== -1) state.crate.vibesList[idx].trackCount -= 1;
-          loadCrateVibeDetail(el);
-        } catch (err) {
-          toast(err.message);
-        }
-      };
-    });
+    document.getElementById("btn-bulk-add").onclick = () => {
+      crateHandleBulkAdd(state.crate.selectedTrackIds, () => {
+        state.crate.selectedTrackIds = new Set();
+        loadCrate();
+      });
+    };
   }
 
   if (dragEnabled) {
@@ -1792,6 +2069,7 @@ function renderCrateGenreDetail(el, genre) {
     checkboxEnabled: editMode, selectedIds: state.crate.selectedTrackIds,
   });
   crateWireTrackSortHeaders(el, () => renderCrateGenreDetail(el, genre));
+  crateWireTrackEditPencils(document.getElementById("genre-tracks"), rows, () => loadCrateGenreDetail(el));
 
   document.getElementById("track-search").oninput = (e) => {
     state.crate.trackSearchQuery = e.target.value;
@@ -1871,18 +2149,204 @@ function crateUpdateGenreSelectedCount() {
   if (el) el.textContent = `${state.crate.selectedTrackIds.size} selected`;
 }
 
+// ---------------------------------------------------------------------------
+// Source of Truth track-view — the tracks inside one batch (Discovered
+// Tracks or a file import). Edit mode: checkbox multi-select, Delete
+// Selected (deletes the track from your database completely — same cascade
+// as any other delete-track-from-Imports action), and the shared
+// Add-to-List/Vibe control.
+// ---------------------------------------------------------------------------
+
+async function loadCrateBatchDetail(el) {
+  el.innerHTML = `<div class="empty-state"><span class="spinner"></span> Loading...</div>`;
+  try {
+    const detail = await api(`/imports/${encodeURIComponent(state.crate.activeItemId)}`, { needsAuth: true });
+    renderCrateBatchDetail(el, detail);
+  } catch (err) {
+    el.innerHTML = errorCardHtml(err.message);
+  }
+}
+
+function renderCrateBatchDetail(el, batch) {
+  crateResetTrackViewIfNewItem(`imports:${batch.id}`);
+
+  const editMode = state.crate.editMode;
+  const rows = crateFilterAndSortTracks(batch.tracks);
+
+  el.innerHTML = `
+    <div class="channel-head">
+      <h4 class="crate-heading">${escapeHtml(batch.filename)}</h4>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="icon-btn" id="btn-back-to-batches">← source of truth</button>
+        <button class="icon-btn" id="btn-edit-mode">${editMode ? "done" : "edit"}</button>
+      </div>
+    </div>
+
+    <div class="track-meta-row">${batch.createdAt ? `Created ${new Date(batch.createdAt).toLocaleDateString()} · ` : ""}${crateBatchModeLabel(batch.mode)} · ${batch.tracks.length} track${batch.tracks.length === 1 ? "" : "s"}</div>
+
+    <div class="seed-row" style="margin-top:14px;">
+      <input class="input" id="track-search" placeholder="Search tracks..." value="${escapeAttr(state.crate.trackSearchQuery)}" style="flex:1;" />
+    </div>
+
+    ${editMode ? `
+      <div class="seed-row" style="margin-top:10px; align-items:center; flex-wrap:wrap;">
+        <button class="btn btn-sm" id="btn-delete-selected-tracks">Delete Selected</button>
+        ${crateBulkAddSelectHtml(null, null)}
+      </div>
+      <div style="margin-top:6px; color:var(--muted); font-size:10.5px;" id="tracks-selected-count"></div>
+    ` : ""}
+
+    <div id="batch-tracks" style="margin-top:12px;"></div>
+  `;
+
+  document.getElementById("batch-tracks").innerHTML = crateTrackTableHtml(rows, { dragEnabled: false, showRemove: false, checkboxEnabled: editMode, selectedIds: state.crate.selectedTrackIds });
+  crateWireTrackSortHeaders(el, () => renderCrateBatchDetail(el, batch));
+  crateWireTrackEditPencils(document.getElementById("batch-tracks"), rows, () => loadCrateBatchDetail(el));
+
+  document.getElementById("track-search").oninput = (e) => {
+    state.crate.trackSearchQuery = e.target.value;
+    renderCrateBatchDetail(el, batch);
+  };
+
+  document.getElementById("btn-back-to-batches").onclick = () => {
+    state.crate.activeItemId = null;
+    renderCrateMain();
+    renderCrateSidebar();
+  };
+
+  document.getElementById("btn-edit-mode").onclick = () => {
+    state.crate.editMode = !state.crate.editMode;
+    state.crate.selectedTrackIds = new Set();
+    renderCrateBatchDetail(el, batch);
+  };
+
+  if (editMode) {
+    crateUpdateTracksSelectedCount();
+
+    document.querySelectorAll(".track-select-checkbox").forEach((cb) => {
+      cb.onchange = () => {
+        if (cb.checked) state.crate.selectedTrackIds.add(cb.dataset.trackId);
+        else state.crate.selectedTrackIds.delete(cb.dataset.trackId);
+        crateUpdateTracksSelectedCount();
+      };
+    });
+
+    const selectAllCb = document.getElementById("track-select-all");
+    if (selectAllCb) {
+      selectAllCb.onchange = () => {
+        if (selectAllCb.checked) rows.forEach((t) => state.crate.selectedTrackIds.add(t.id));
+        else rows.forEach((t) => state.crate.selectedTrackIds.delete(t.id));
+        renderCrateBatchDetail(el, batch);
+      };
+    }
+
+    document.getElementById("btn-delete-selected-tracks").onclick = async () => {
+      const ids = [...state.crate.selectedTrackIds];
+      if (ids.length === 0) {
+        toast("Select at least one track");
+        return;
+      }
+      if (!confirm(`Delete ${ids.length} track${ids.length === 1 ? "" : "s"}? This removes them from your database completely.`)) return;
+      try {
+        await api("/imports/delete-tracks", { method: "POST", needsAuth: true, body: { batchId: batch.id, uploadIds: ids } });
+        state.crate.selectedTrackIds = new Set();
+        toast("Deleted");
+        await loadCrateBatches();
+        loadCrateBatchDetail(el);
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+
+    document.getElementById("btn-bulk-add").onclick = () => {
+      crateHandleBulkAdd(state.crate.selectedTrackIds, () => {
+        state.crate.selectedTrackIds = new Set();
+        loadCrate();
+      });
+    };
+  }
+}
+
+// Shared "Add selected to..." control — one dropdown grouping Lists and
+// Vibes together (with create-new options in each group), used from every
+// Edit-mode action bar (Lists, Vibes, Genres, Imported).
+function crateBulkAddSelectHtml(excludeListId, excludeVibeId) {
+  return `
+    <select class="input" id="bulk-add-target" style="flex:1; min-width:160px;">
+      <option value="">Add selected to...</option>
+      <optgroup label="Lists">
+        <option value="list:__new__">+ Create new list...</option>
+        ${state.crate.lists.filter((l) => l.id !== excludeListId).map((l) => `<option value="list:${escapeAttr(l.id)}">${escapeHtml(l.name)}</option>`).join("")}
+      </optgroup>
+      <optgroup label="Vibes">
+        <option value="vibe:__new__">+ Create new vibe...</option>
+        ${state.crate.vibesList.filter((v) => v.id !== excludeVibeId).map((v) => `<option value="vibe:${escapeAttr(v.id)}">${escapeHtml(v.name)}</option>`).join("")}
+      </optgroup>
+    </select>
+    <button class="btn btn-sm" id="btn-bulk-add">Add</button>
+  `;
+}
+
+async function crateHandleBulkAdd(selectedIds, onDone) {
+  const select = document.getElementById("bulk-add-target");
+  if (!select) return;
+  const value = select.value;
+  if (!value) {
+    toast("Pick a destination first");
+    return;
+  }
+  if (selectedIds.size === 0) {
+    toast("Select at least one track");
+    return;
+  }
+  const [kind, target] = value.split(":");
+  try {
+    if (kind === "list") {
+      const body = { uploadIds: [...selectedIds] };
+      if (target === "__new__") {
+        const name = prompt("New list name:");
+        if (!name || !name.trim()) return;
+        body.newListName = name.trim();
+      } else {
+        body.listId = target;
+      }
+      await api("/crate/add-tracks", { method: "POST", needsAuth: true, body });
+      toast("Added to list");
+    } else {
+      const body = { uploadIds: [...selectedIds] };
+      if (target === "__new__") {
+        const name = prompt("New vibe name:");
+        if (!name || !name.trim()) return;
+        body.newVibeName = name.trim();
+      } else {
+        body.vibeId = target;
+      }
+      await api("/vibes/add-existing-tracks", { method: "POST", needsAuth: true, body });
+      toast("Added to vibe");
+    }
+    onDone();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+function crateUpdateTracksSelectedCount() {
+  const el = document.getElementById("tracks-selected-count");
+  if (el) el.textContent = `${state.crate.selectedTrackIds.size} selected`;
+}
+
 function renderCrateMainList(el, isAdmin) {
-  const list = state.crate.lists[state.crate.activeItemId];
+  const list = crateFindList(state.crate.activeItemId);
 
   if (!list) {
     el.innerHTML = `<div class="empty-state">Select or create a list</div>`;
     return;
   }
 
-  crateResetTrackViewIfNewItem(`lists:${state.crate.activeItemId}`);
+  crateResetTrackViewIfNewItem(`lists:${list.id}`);
 
   const dragEnabled = isAdmin && crateCanReorder();
-  const showRemove = isAdmin && state.crate.editMode;
+  const checkboxEnabled = isAdmin && state.crate.editMode;
   const rows = crateFilterAndSortTracks(list.tracks);
 
   el.innerHTML = `
@@ -1905,19 +2369,23 @@ function renderCrateMainList(el, isAdmin) {
       <input class="input" id="track-search" placeholder="Search tracks..." value="${escapeAttr(state.crate.trackSearchQuery)}" style="flex:1;" />
     </div>
 
-    ${isAdmin && !state.crate.editMode ? `
-      <div class="seed-row" style="margin-top:10px;">
-        <input class="input" id="manual-artist" placeholder="Artist" style="flex:1;" />
-        <input class="input" id="manual-track" placeholder="Track" style="flex:1;" />
-        <button class="btn btn-sm" id="btn-add-manual">Add</button>
+    ${checkboxEnabled ? `
+      <div class="seed-row" style="margin-top:10px; align-items:center; flex-wrap:wrap;">
+        <button class="btn btn-sm" id="btn-delete-selected-tracks">Delete Selected</button>
+        ${crateBulkAddSelectHtml(list.id, null)}
       </div>
+      <div style="margin-top:6px; color:var(--muted); font-size:10.5px;" id="tracks-selected-count"></div>
     ` : ""}
 
     <div id="crate-tracks" style="margin-top:12px;"></div>
   `;
 
-  document.getElementById("crate-tracks").innerHTML = crateTrackTableHtml(rows, { dragEnabled, showRemove });
+  document.getElementById("crate-tracks").innerHTML = crateTrackTableHtml(rows, { dragEnabled, showRemove: false, checkboxEnabled, selectedIds: state.crate.selectedTrackIds });
   crateWireTrackSortHeaders(el, () => renderCrateMainList(el, isAdmin));
+  crateWireTrackEditPencils(document.getElementById("crate-tracks"), rows, async () => {
+    await loadCrate();
+    renderCrateMainList(el, isAdmin);
+  });
 
   document.getElementById("track-search").oninput = (e) => {
     state.crate.trackSearchQuery = e.target.value;
@@ -1948,42 +2416,62 @@ function renderCrateMainList(el, isAdmin) {
     };
     document.getElementById("btn-delete-list").onclick = () => {
       if (!confirm(`Delete "${list.name}"?`)) return;
-      state.crate.lists.splice(state.crate.activeItemId, 1);
+      state.crate.lists = state.crate.lists.filter((l) => l.id !== list.id);
       state.crate.activeItemId = null;
       persistCrate();
       renderCrate();
     };
     document.getElementById("btn-edit-mode").onclick = () => {
       state.crate.editMode = !state.crate.editMode;
+      state.crate.selectedTrackIds = new Set();
       renderCrateMainList(el, isAdmin);
     };
-    const addManualBtn = document.getElementById("btn-add-manual");
-    if (addManualBtn) {
-      addManualBtn.onclick = () => {
-        const artist = document.getElementById("manual-artist").value.trim();
-        const track = document.getElementById("manual-track").value.trim();
-        if (!artist) return;
-        list.tracks.push({ artist, track, label: "", bpm: "", key: "", time: "", genre: "", notes: "", audioUrl: null });
-        list.updatedAt = new Date().toISOString();
-        persistCrate();
-        renderCrateMainList(el, isAdmin);
-      };
-    }
   }
 
   document.getElementById("btn-export-list").onclick = () => exportListAsTxt(list);
 
   const tracksContainer = document.getElementById("crate-tracks");
 
-  if (showRemove) {
-    tracksContainer.querySelectorAll("[data-track-remove-i]").forEach((btn) => {
-      btn.onclick = () => {
-        list.tracks.splice(+btn.dataset.trackRemoveI, 1);
-        list.updatedAt = new Date().toISOString();
-        persistCrate();
-        renderCrateMainList(el, isAdmin);
+  if (checkboxEnabled) {
+    crateUpdateTracksSelectedCount();
+
+    tracksContainer.querySelectorAll(".track-select-checkbox").forEach((cb) => {
+      cb.onchange = () => {
+        if (cb.checked) state.crate.selectedTrackIds.add(cb.dataset.trackId);
+        else state.crate.selectedTrackIds.delete(cb.dataset.trackId);
+        crateUpdateTracksSelectedCount();
       };
     });
+
+    const selectAllCb = document.getElementById("track-select-all");
+    if (selectAllCb) {
+      selectAllCb.onchange = () => {
+        if (selectAllCb.checked) rows.forEach((t) => state.crate.selectedTrackIds.add(t.id));
+        else rows.forEach((t) => state.crate.selectedTrackIds.delete(t.id));
+        renderCrateMainList(el, isAdmin);
+      };
+    }
+
+    document.getElementById("btn-delete-selected-tracks").onclick = () => {
+      if (state.crate.selectedTrackIds.size === 0) {
+        toast("Select at least one track");
+        return;
+      }
+      const removing = state.crate.selectedTrackIds;
+      list.trackIds = (list.trackIds || []).filter((id) => !removing.has(id));
+      list.tracks = list.tracks.filter((t) => !removing.has(t.id));
+      list.updatedAt = new Date().toISOString();
+      state.crate.selectedTrackIds = new Set();
+      persistCrate();
+      renderCrateMainList(el, isAdmin);
+    };
+
+    document.getElementById("btn-bulk-add").onclick = () => {
+      crateHandleBulkAdd(state.crate.selectedTrackIds, () => {
+        state.crate.selectedTrackIds = new Set();
+        loadCrate();
+      });
+    };
   }
 
   if (dragEnabled) {
@@ -2005,6 +2493,7 @@ function setupListDragReorder(container, list, el, isAdmin) {
       if (dragIndex === null || dragIndex === dropIndex) return;
       const [moved] = list.tracks.splice(dragIndex, 1);
       list.tracks.splice(dropIndex, 0, moved);
+      list.trackIds = list.tracks.map((t) => t.id);
       list.updatedAt = new Date().toISOString();
       persistCrate();
       renderCrateMainList(el, isAdmin);
@@ -2571,6 +3060,7 @@ function parseRekordboxXML(xmlText) {
     tracks.push({
       artist: el.getAttribute("Artist") || "",
       track: el.getAttribute("Name") || "",
+      album: el.getAttribute("Album") || "",
       genre: el.getAttribute("Genre") || "",
       bpm: el.getAttribute("AverageBpm") || "",
       key: el.getAttribute("Tonality") || "",
@@ -2613,6 +3103,7 @@ function parseRekordboxTXT(text) {
 
   const trackIdx = colIndex("Track Title", "Name");
   const artistIdx = colIndex("Artist");
+  const albumIdx = colIndex("Album");
   const genreIdx = colIndex("Genre");
   const bpmIdx = colIndex("BPM");
   const keyIdx = colIndex("Key", "Tonality");
@@ -2628,6 +3119,7 @@ function parseRekordboxTXT(text) {
     tracks.push({
       artist,
       track,
+      album: albumIdx !== -1 ? (cols[albumIdx] || "").trim() : "",
       genre: genreIdx !== -1 ? (cols[genreIdx] || "").trim() : "",
       bpm: bpmIdx !== -1 ? (cols[bpmIdx] || "").trim() : "",
       key: keyIdx !== -1 ? (cols[keyIdx] || "").trim() : "",
@@ -2768,7 +3260,7 @@ function renderImport() {
 
   document.getElementById("btn-run-import").onclick = async () => {
     const description = document.getElementById("import-description").value.trim() || null;
-    const body = { mode: imp.mode, tracks: imp.tracks, description };
+    const body = { mode: imp.mode, tracks: imp.tracks, description, filename: imp.fileName };
 
     if (imp.mode === "add-to-vibe") {
       const targetVibeId = document.getElementById("import-target-vibe").value;
